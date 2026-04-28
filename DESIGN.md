@@ -1,0 +1,167 @@
+---
+version: alpha
+name: Hermes Calm Console
+description: "A restrained agent control surface: conversational content first, tool traces as quiet metadata, minimal chrome."
+colors:
+  primary: "#E6EAF0"
+  secondary: "#8B93A1"
+  tertiary: "#D7B94C"
+  neutral: "#0D1117"
+  surface: "#111827"
+  surfaceSubtle: "#161B22"
+  borderSubtle: "#27313F"
+  success: "#4CAF50"
+  warning: "#FFA726"
+  error: "#EF5350"
+typography:
+  body-md:
+    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
+    fontSize: 14px
+    fontWeight: 400
+    lineHeight: 1.6
+  body-sm:
+    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
+    fontSize: 12px
+    fontWeight: 400
+    lineHeight: 1.45
+  mono-xs:
+    fontFamily: "SF Mono, ui-monospace, monospace"
+    fontSize: 11px
+    fontWeight: 500
+    lineHeight: 1.55
+rounded:
+  sm: 4px
+  md: 8px
+  lg: 12px
+  pill: 999px
+spacing:
+  xs: 4px
+  sm: 8px
+  md: 12px
+  lg: 16px
+components:
+  app-shell:
+    backgroundColor: "{colors.neutral}"
+    textColor: "{colors.primary}"
+    rounded: "{rounded.sm}"
+    padding: 16px
+  panel:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.primary}"
+    rounded: "{rounded.lg}"
+    padding: 16px
+  border-line:
+    backgroundColor: "{colors.borderSubtle}"
+    textColor: "{colors.primary}"
+    rounded: "{rounded.sm}"
+    padding: 4px
+  state-success:
+    backgroundColor: "{colors.success}"
+    textColor: "#111827"
+    rounded: "{rounded.sm}"
+    padding: 4px
+  state-warning:
+    backgroundColor: "{colors.warning}"
+    textColor: "#111827"
+    rounded: "{rounded.sm}"
+    padding: 4px
+  state-error:
+    backgroundColor: "{colors.error}"
+    textColor: "#111827"
+    rounded: "{rounded.sm}"
+    padding: 4px
+  tool-call-group:
+    backgroundColor: "{colors.neutral}"
+    textColor: "{colors.secondary}"
+    rounded: "{rounded.md}"
+    padding: 4px
+  tool-card:
+    backgroundColor: "{colors.surfaceSubtle}"
+    textColor: "{colors.secondary}"
+    rounded: "{rounded.md}"
+    padding: 8px
+  user-message:
+    backgroundColor: "{colors.tertiary}"
+    textColor: "#111827"
+    rounded: "{rounded.lg}"
+    padding: 12px
+---
+
+## Overview
+
+Hermes WebUI should feel like a calm developer console, not a demo page assembled from colorful cards. The primary artifact is the conversation. Tool calls, thinking traces, context compaction records, token usage, and runtime status are useful, but they are transcript metadata and should sit below the visual priority of user and assistant prose.
+
+The desired direction is Linear/Vercel precision with a little Claude-style conversational warmth: quiet surfaces, clear spacing, restrained accent use, and progressive disclosure for debugging detail.
+
+## Colors
+
+- **Primary (#E6EAF0):** main text on dark surfaces. Avoid cream/gold as body text; it makes the entire UI feel themed.
+- **Secondary (#8B93A1):** metadata, tool summaries, timestamps, placeholder text.
+- **Tertiary (#D7B94C):** Hermes accent. Use sparingly for active state, focus, and primary action. Do not use it for every border.
+- **Neutral (#0D1117):** app background.
+- **Surface/Subtle surfaces:** only separate areas that need separation. Prefer spacing over extra bordered rectangles.
+- **Semantic colors:** success/warning/error/info are state colors only, not decorative palette choices.
+
+## Typography
+
+Use the system sans stack for UI and conversation. Use monospace only for code, file paths, commands, tool names, and compact metadata. Avoid making whole cards feel like terminal output unless they actually are logs.
+
+Scale should stay tight: 11px metadata, 12px labels, 14px body, 16–18px headings. Do not proliferate 10px/10.5px/12.5px one-offs unless there is a real layout constraint.
+
+## Layout
+
+Conversation rhythm:
+
+1. User message — right aligned, compact bubble.
+2. Assistant content — left aligned, prose-first, no heavy bubble.
+3. Tool/thinking/context traces — quiet disclosure rows inside the assistant turn.
+4. Raw logs/details — hidden until explicitly expanded.
+
+Metadata should not break the reading flow. A turn that used ten tools should read as one assistant turn with one compact `Used 10 tools` disclosure, not ten content cards.
+
+## Elevation & Depth
+
+Use almost no shadows in the transcript. Shadows are reserved for popovers, dropdowns, modal dialogs, and floating controls. Cards inside chat should use either a subtle border or a subtle tint, not both aggressively.
+
+## Shapes
+
+- Rows/list items: `4–8px` radius.
+- Cards/panels: `8–12px` radius.
+- Pills: only true chips/badges use `999px`.
+- Avoid stacks of nested rounded rectangles. If a card contains another card, one of them is probably unnecessary.
+
+## Components
+
+### Tool-call group
+
+Collapsed by default in settled history. Summary line shows count and names: `Used 4 tools · read_file, patch, terminal`. Expanding reveals individual tool cards. Live runs may stay expanded while active, then collapse when settled.
+
+### Tool card
+
+A tool card is a debug event row, not a chat message. Show icon, name, short target/preview, and status. Arguments and result snippets stay behind expansion. Result snippets should be truncated; full logs belong behind “show more”.
+
+### Thinking/context cards
+
+Same visual family as tool-call metadata. They should be quieter than assistant prose and should not use bright tinted full cards unless the user expands them.
+
+### Composer
+
+The composer is the command surface. Keep it legible and focused: modest radius, subtle border, transparent inactive chips, no theatrical hover scaling.
+
+## Do's and Don'ts
+
+Do:
+
+- Collapse noisy agent internals by default.
+- Use one accent color at a time.
+- Prefer neutral borders and restrained surfaces.
+- Make debug traces accessible and inspectable without making them visually dominant.
+- Add stable class/data hooks for future visual regression tests.
+
+Don't:
+
+- Render every tool call as a first-class chat card.
+- Mix gold, cyan, purple, orange, red, and green as decorative colors in the same viewport.
+- Add new hardcoded radius/color values when a token exists.
+- Use shadows, gradients, and hover transforms for routine controls.
+- Hide important error or approval states; those are allowed to be prominent because they require action.

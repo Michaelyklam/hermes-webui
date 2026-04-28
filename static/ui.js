@@ -2024,6 +2024,7 @@ async function forceUpdate(btn){
 // blind setTimeout(reload, 2500) that race-lost against slow hardware or
 // reverse proxies that 502 immediately when the upstream socket closes (#874).
 async function _waitForServerThenReload(opts){
+  // Polls the /health endpoint; implementation uses a relative URL so subpath mounts keep working.
   opts=opts||{};
   const interval=opts.interval||500;
   const maxMs=opts.maxMs||15000;
@@ -2814,7 +2815,7 @@ function renderMessages(){
     if(derived.length) S.toolCalls=derived;
   }
   if(!S.busy && S.toolCalls && S.toolCalls.length){
-    inner.querySelectorAll('.tool-card-row:not([data-compression-card])').forEach(el=>el.remove());
+    inner.querySelectorAll('.tool-call-group:not([data-compression-card]),.tool-card-row:not([data-compression-card])').forEach(el=>el.remove());
     const byAssistant = {};
     for(const tc of S.toolCalls){
       const key = tc.assistant_msg_idx !== undefined ? tc.assistant_msg_idx : -1;
@@ -2832,34 +2833,23 @@ function renderMessages(){
       }
       if(!anchorRow) continue;
       const anchorParent=anchorRow.parentElement;
-      const frag=document.createDocumentFragment();
-      let lastInsertedNode=null;
+      const group=document.createElement('div');
+      group.className='tool-call-group tool-call-group-collapsed';
+      group.setAttribute('data-tool-call-group','1');
+      const names=cards.map(tc=>_toolDisplayName(tc)).filter(Boolean);
+      const uniqueNames=[...new Set(names)];
+      const toolCalls=cards.length;
+      const list=uniqueNames.slice(0,5).join(', ')+(uniqueNames.length>5?'…':'');
+      group.innerHTML=`<button type="button" class="tool-call-group-summary" aria-expanded="false" onclick="const g=this.closest('.tool-call-group');const c=g.classList.toggle('tool-call-group-collapsed');this.setAttribute('aria-expanded',String(!c));"><span class="tool-call-group-chevron">${li('chevron-right',12)}</span><span class="tool-call-group-label">Used ${toolCalls} tool${toolCalls===1?'':'s'}</span><span class="tool-call-group-list">${esc(list)}</span><span class="tool-call-group-count">${toolCalls}</span></button><div class="tool-call-group-body"></div>`;
+      const body=group.querySelector('.tool-call-group-body');
       for(const tc of cards){
-        const card=buildToolCard(tc);
-        frag.appendChild(card);
-        lastInsertedNode=card;
-      }
-      // Add expand/collapse toggle for groups with 2+ cards
-      if(cards.length>=2){
-        const toggle=document.createElement('div');
-        toggle.className='tool-cards-toggle';
-        // Collect card elements before they get moved to DOM
-        const cardEls=Array.from(frag.querySelectorAll('.tool-card'));
-        const expandBtn=document.createElement('button');
-        expandBtn.textContent=t('expand_all');
-        expandBtn.onclick=()=>cardEls.forEach(c=>c.classList.add('open'));
-        const collapseBtn=document.createElement('button');
-        collapseBtn.textContent=t('collapse_all');
-        collapseBtn.onclick=()=>cardEls.forEach(c=>c.classList.remove('open'));
-        toggle.appendChild(expandBtn);
-        toggle.appendChild(collapseBtn);
-        frag.insertBefore(toggle,frag.firstChild);
+        body.appendChild(buildToolCard(tc));
       }
       const insertAfterNode = anchorInsertAfter.get(anchorRow) || anchorRow;
       const refNode = insertAfterNode ? insertAfterNode.nextSibling : null;
-      if(refNode) anchorParent.insertBefore(frag,refNode);
-      else anchorParent.appendChild(frag);
-      if(anchorRow&&lastInsertedNode) anchorInsertAfter.set(anchorRow, lastInsertedNode);
+      if(refNode) anchorParent.insertBefore(group,refNode);
+      else anchorParent.appendChild(group);
+      if(anchorRow) anchorInsertAfter.set(anchorRow, group);
     }
   }
   // Render per-turn token usage on each assistant message that has it (#503).
@@ -2916,6 +2906,12 @@ function renderMessages(){
   }
 }
 
+function _toolDisplayName(tc){
+  const name=(tc&&tc.name)||'tool';
+  if(name==='subagent_progress') return 'Subagent';
+  if(name==='delegate_task') return 'Delegate task';
+  return name;
+}
 function toolIcon(name){
   const icons={
     terminal:        li('terminal'),
@@ -2960,9 +2956,7 @@ function buildToolCard(tc){
   const isDelegation=tc.name==='delegate_task';
   const cardClass='tool-card'+(tc.done===false?' tool-card-running':'')+(isSubagent?' tool-card-subagent':'');
   // Clean up legacy subagent prefixes since the Lucide icon already shows it
-  let displayName=tc.name;
-  if(isSubagent) displayName='Subagent';
-  if(isDelegation) displayName='Delegate task';
+  let displayName=_toolDisplayName(tc);
   let previewText=tc.preview||displaySnippet||'';
   if(isSubagent) previewText=previewText.replace(/^(?:\u{1F500}|↳)\s*/u,'');
   row.innerHTML=`
@@ -2987,6 +2981,23 @@ function buildToolCard(tc){
   return row;
 }
 
+function _syncToolCallGroupSummary(group){
+  if(!group) return;
+  const cards=Array.from(group.querySelectorAll('.tool-card-row .tool-card'));
+  const count=cards.length;
+  const names=cards.map(card=>{
+    const el=card.querySelector('.tool-card-name');
+    return el?String(el.textContent||'').trim():'';
+  }).filter(Boolean);
+  const uniqueNames=[...new Set(names)];
+  const label=group.querySelector('.tool-call-group-label');
+  const list=group.querySelector('.tool-call-group-list');
+  const badge=group.querySelector('.tool-call-group-count');
+  if(label) label.textContent=count?`Using ${count} tool${count===1?'':'s'}`:'Using tools';
+  if(list) list.textContent=uniqueNames.slice(0,5).join(', ')+(uniqueNames.length>5?'…':'');
+  if(badge) badge.textContent=String(count);
+}
+
 // ── Live tool card helpers (called during SSE streaming) ──
 // Live cards are inserted INLINE inside #msgInner (tagged with data-live-tid)
 // so the streaming layout matches the settled layout produced by renderMessages
@@ -3006,46 +3017,40 @@ function appendLiveToolCard(tc){
   const inner=_assistantTurnBlocks(turn);
   if(!inner) return;
   const tid=tc.tid||'';
+  let group=inner.querySelector('.tool-call-group[data-live-tool-call-group="1"]');
+  if(!group){
+    group=document.createElement('div');
+    group.className='tool-call-group';
+    group.setAttribute('data-tool-call-group','1');
+    group.setAttribute('data-live-tool-call-group','1');
+    group.innerHTML=`<button type="button" class="tool-call-group-summary" aria-expanded="true" onclick="const g=this.closest('.tool-call-group');const c=g.classList.toggle('tool-call-group-collapsed');this.setAttribute('aria-expanded',String(!c));"><span class="tool-call-group-chevron">${li('chevron-right',12)}</span><span class="tool-call-group-label">Using tools</span><span class="tool-call-group-list"></span><span class="tool-call-group-count">0</span></button><div class="tool-call-group-body"></div>`;
+    const children=Array.from(inner.children);
+    const anchor=children.filter(el=>el.matches('[data-live-assistant="1"],.tool-call-group,.tool-card-row,.thinking-card-row')).pop();
+    if(anchor) anchor.insertAdjacentElement('afterend', group);
+    else inner.appendChild(group);
+  }
+  const body=group.querySelector('.tool-call-group-body');
   // Update existing card in place (tool_complete after tool_start)
   if(tid){
-    const existing=inner.querySelector(`.tool-card-row[data-live-tid="${CSS.escape(tid)}"]`);
+    const existing=body.querySelector(`.tool-card-row[data-live-tid="${CSS.escape(tid)}"]`);
     if(existing){
       const replacement=buildToolCard(tc);
       replacement.dataset.liveTid=tid;
       existing.replaceWith(replacement);
-      // Keep #toolRunningRow alive — dots stay until text starts streaming
-      // or the next tool fires (which replaces them). Removing here caused
-      // a gap between tool completion and the first text token arriving.
+      _syncToolCallGroupSummary(group);
       return;
     }
   }
   const row=buildToolCard(tc);
   if(tid) row.dataset.liveTid=tid;
-  // Insert after whichever comes last: the current live assistant segment or
-  // the last tool card. This handles both cases:
-  //   text → tool1 → tool2  (no text between tools: anchor is card1)
-  //   text1 → tool1 → text2 → tool2  (text between tools: anchor is text2)
-  const children=Array.from(inner.children);
-  // Include .thinking-card-row so tool cards land AFTER a finalized thinking
-  // card, not between the text segment and thinking.
-  const anchor=children.filter(el=>el.matches('[data-live-assistant="1"],.tool-card-row,.thinking-card-row')).pop();
-  if(anchor) anchor.insertAdjacentElement('afterend', row);
-  else inner.appendChild(row);
-  // Add a 3-dot waiting indicator below the tool card so there's visual
-  // feedback while the tool is running. Removed when text starts streaming
-  // (ensureAssistantRow) or when tool_complete fires.
-  const oldWait=$('toolRunningRow');if(oldWait)oldWait.remove();
-  const waitRow=document.createElement('div');
-  waitRow.id='toolRunningRow';
-  waitRow.className='assistant-segment';
-  waitRow.innerHTML='<div class="thinking"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
-  row.insertAdjacentElement('afterend', waitRow);
+  body.appendChild(row);
+  _syncToolCallGroupSummary(group);
   if(typeof scrollIfPinned==='function') scrollIfPinned();
 }
 
 function clearLiveToolCards(){
   const inner=_assistantTurnBlocks($('liveAssistantTurn'));
-  if(inner) inner.querySelectorAll('.tool-card-row[data-live-tid]').forEach(el=>el.remove());
+  if(inner) inner.querySelectorAll('.tool-call-group[data-live-tool-call-group],.tool-card-row[data-live-tid]').forEach(el=>el.remove());
   // Legacy #liveToolCards container cleanup — kept for safety in case any
   // leftover cards were inserted there before this refactor took effect.
   const container=$('liveToolCards');
