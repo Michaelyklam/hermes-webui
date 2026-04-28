@@ -229,7 +229,7 @@ def check_auth(handler, parsed) -> bool:
         handler.wfile.write(b'{"error":"Authentication required"}')
     else:
         handler.send_response(302)
-        handler.send_header('Location', '/login')
+        handler.send_header('Location', 'login')
         handler.end_headers()
     return False
 

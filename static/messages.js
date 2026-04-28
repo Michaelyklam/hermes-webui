@@ -1683,7 +1683,7 @@ function sendBrowserNotification(title,body){
 
 function attachBtwStream(parentSid, streamId, question){
   if(!parentSid||!streamId) return;
-  const src=new EventSource('/api/chat/stream?stream_id='+encodeURIComponent(streamId));
+  const src=new EventSource(new URL('api/chat/stream?stream_id='+encodeURIComponent(streamId), location.href).href);
   let answer='';
   let btwRow=null;
   let _streamDone=false;
