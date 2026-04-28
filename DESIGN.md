@@ -3,16 +3,17 @@ version: alpha
 name: Hermes Calm Console
 description: "A restrained agent control surface: conversational content first, tool traces as quiet metadata, minimal chrome."
 colors:
-  primary: "#E6EAF0"
-  secondary: "#8B93A1"
-  tertiary: "#D7B94C"
-  neutral: "#0D1117"
-  surface: "#111827"
-  surfaceSubtle: "#161B22"
-  borderSubtle: "#27313F"
-  success: "#4CAF50"
-  warning: "#FFA726"
-  error: "#EF5350"
+  primary: "#EAE0D5"
+  secondary: "#C6AC8F"
+  tertiary: "#C6AC8F"
+  neutral: "#0A0908"
+  surface: "#22333B"
+  surfaceSubtle: "#11100E"
+  borderSubtle: "#3B4A50"
+  ink: "#0A0908"
+  success: "#86C08B"
+  warning: "#E0B15D"
+  error: "#F87171"
 typography:
   body-md:
     fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
@@ -57,17 +58,17 @@ components:
     padding: 4px
   state-success:
     backgroundColor: "{colors.success}"
-    textColor: "#111827"
+    textColor: "{colors.ink}"
     rounded: "{rounded.sm}"
     padding: 4px
   state-warning:
     backgroundColor: "{colors.warning}"
-    textColor: "#111827"
+    textColor: "{colors.ink}"
     rounded: "{rounded.sm}"
     padding: 4px
   state-error:
     backgroundColor: "{colors.error}"
-    textColor: "#111827"
+    textColor: "{colors.ink}"
     rounded: "{rounded.sm}"
     padding: 4px
   tool-call-group:
@@ -82,7 +83,7 @@ components:
     padding: 8px
   user-message:
     backgroundColor: "{colors.tertiary}"
-    textColor: "#111827"
+    textColor: "{colors.ink}"
     rounded: "{rounded.lg}"
     padding: 12px
 ---
@@ -95,11 +96,11 @@ The desired direction is Linear/Vercel precision with a little Claude-style conv
 
 ## Colors
 
-- **Primary (#E6EAF0):** main text on dark surfaces. Avoid cream/gold as body text; it makes the entire UI feel themed.
-- **Secondary (#8B93A1):** metadata, tool summaries, timestamps, placeholder text.
-- **Tertiary (#D7B94C):** Hermes accent. Use sparingly for active state, focus, and primary action. Do not use it for every border.
-- **Neutral (#0D1117):** app background.
-- **Surface/Subtle surfaces:** only separate areas that need separation. Prefer spacing over extra bordered rectangles.
+- **Primary (#EAE0D5):** main text on dark surfaces. The warm parchment should feel readable and grounded, not like bright white terminal text.
+- **Secondary/Tertiary (#C6AC8F):** metadata and restrained accent. Use sparingly for active state, focus, user bubbles, and quiet emphasis.
+- **Neutral (#0A0908):** app background and ink. This gives the WebUI depth without returning to the previous navy/gold theme.
+- **Surface (#22333B):** panels, sidebar, and stronger interactive surfaces. It should carry the structure while the conversation remains primary.
+- **Light surfaces (#EAE0D5 / #F4EEE7):** light mode uses the palette's parchment as the field and a slightly lifted derived surface for panels.
 - **Semantic colors:** success/warning/error/info are state colors only, not decorative palette choices.
 
 ## Typography

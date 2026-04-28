@@ -9,6 +9,7 @@ import re
 
 REPO = pathlib.Path(__file__).parent.parent
 UI_JS = (REPO / "static" / "ui.js").read_text(encoding="utf-8")
+BOOT_JS = (REPO / "static" / "boot.js").read_text(encoding="utf-8")
 CSS = (REPO / "static" / "style.css").read_text(encoding="utf-8")
 
 
@@ -133,34 +134,52 @@ class TestToolCardDesignTokens:
         ):
             assert token in CSS, f"Missing design token {token} in style.css"
 
-    def test_default_dark_palette_implements_calm_console_tokens(self):
+    def test_default_dark_palette_implements_coolors_tokens(self):
         css_min = re.sub(r"\s+", "", CSS)
         expected_tokens = (
+            "--bg:#0A0908",
+            "--sidebar:#22333B",
+            "--border:#3B4A50",
+            "--text:#EAE0D5",
+            "--muted:#C6AC8F",
+            "--accent:#C6AC8F",
+            "--surface:#22333B",
+            "--topbar-bg:rgba(34,51,59,.96)",
+        )
+        for token in expected_tokens:
+            assert token in css_min, f"Coolors dark palette token missing: {token}"
+
+    def test_light_palette_implements_coolors_tokens(self):
+        css_min = re.sub(r"\s+", "", CSS)
+        expected_tokens = (
+            "--bg:#EAE0D5",
+            "--sidebar:#F4EEE7",
+            "--border:#C6AC8F",
+            "--text:#0A0908",
+            "--muted:#5B4B3B",
+            "--accent:#22333B",
+            "--surface:#F4EEE7",
+        )
+        for token in expected_tokens:
+            assert token in css_min, f"Coolors light palette token missing: {token}"
+
+    def test_old_calm_console_palette_tokens_are_not_left_as_base_theme(self):
+        css_min = re.sub(r"\s+", "", CSS)
+        old_base_tokens = (
             "--bg:#0D1117",
             "--sidebar:#111827",
-            "--border:#27313F",
-            "--text:#E6EAF0",
-            "--muted:#8B93A1",
             "--accent:#D7B94C",
-            "--surface:#111827",
-            "--topbar-bg:rgba(17,24,39,.96)",
-        )
-        for token in expected_tokens:
-            assert token in css_min, f"Calm Console palette token missing: {token}"
-
-    def test_light_palette_is_neutral_not_gold_tinted(self):
-        css_min = re.sub(r"\s+", "", CSS)
-        expected_tokens = (
             "--bg:#F8FAFC",
-            "--sidebar:#FFFFFF",
-            "--border:#E2E8F0",
             "--text:#0F172A",
-            "--muted:#64748B",
-            "--accent:#8A6F2A",
-            "--surface:#F1F5F9",
         )
-        for token in expected_tokens:
-            assert token in css_min, f"Neutral light palette token missing: {token}"
+        for token in old_base_tokens:
+            assert token not in css_min, f"Old base palette token should be removed: {token}"
+
+    def test_default_skin_preview_uses_coolors_palette(self):
+        boot_min = re.sub(r"\s+", "", BOOT_JS)
+        assert "{name:'Default',colors:['#C6AC8F','#EAE0D5','#22333B']}" in boot_min, (
+            "The Default skin swatch should preview the same Coolors palette as the base theme."
+        )
 
     def test_tool_card_css_uses_design_tokens_for_chrome(self):
         css_min = re.sub(r"\s+", "", CSS)

@@ -625,7 +625,7 @@ window.addEventListener('resize',()=>{
 
 // ── Appearance helpers (theme = light/dark/system, skin = accent color) ──────
 const _SKINS=[
-  {name:'Default',  colors:['#FFD700','#FFBF00','#CD7F32']},
+  {name:'Default',  colors:['#C6AC8F','#EAE0D5','#22333B']},
   {name:'Ares',     colors:['#FF4444','#CC3333','#992222']},
   {name:'Mono',     colors:['#CCCCCC','#999999','#666666']},
   {name:'Slate',    colors:['#334155','#475569','#64748b']},

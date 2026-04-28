@@ -1,19 +1,19 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  /* ── Light mode (default) — neutral Calm Console palette ── */
+  /* ── Light mode (default) — Coolors earth/slate palette ── */
   :root {
-    --bg:#F8FAFC;--sidebar:#FFFFFF;--border:#E2E8F0;--border2:rgba(15,23,42,0.13);
-    --text:#0F172A;--muted:#64748B;--accent:#8A6F2A;--blue:#2563EB;--gold:#8A6F2A;--code-bg:#F1F5F9;
-    --surface:#F1F5F9;--topbar-bg:rgba(255,255,255,.96);--main-bg:rgba(248,250,252,0.72);
-    --focus-ring:rgba(138,111,42,.28);--focus-glow:rgba(138,111,42,.08);
-    --input-bg:rgba(15,23,42,.035);--hover-bg:rgba(15,23,42,.055);
-    --strong:#020617;--em:#475569;--code-text:#475569;--code-inline-bg:rgba(15,23,42,.06);--pre-text:#0F172A;
-    --accent-hover:#6F5922;--accent-bg:rgba(138,111,42,0.08);--accent-bg-strong:rgba(138,111,42,0.15);--accent-text:#6F5922;
-    --error:#DC2626;--success:#16A34A;--warning:#D97706;--info:#2563EB;
+    --bg:#EAE0D5;--sidebar:#F4EEE7;--border:#C6AC8F;--border2:rgba(10,9,8,0.13);
+    --text:#0A0908;--muted:#5B4B3B;--accent:#22333B;--blue:#22333B;--gold:#C6AC8F;--code-bg:#D8C8B7;
+    --surface:#F4EEE7;--topbar-bg:rgba(244,238,231,.96);--main-bg:rgba(234,224,213,0.72);
+    --focus-ring:rgba(34,51,59,.28);--focus-glow:rgba(34,51,59,.08);
+    --input-bg:rgba(10,9,8,.035);--hover-bg:rgba(10,9,8,.055);
+    --strong:#0A0908;--em:#3B3028;--code-text:#22333B;--code-inline-bg:rgba(10,9,8,.06);--pre-text:#0A0908;
+    --accent-hover:#0A0908;--accent-bg:rgba(34,51,59,0.08);--accent-bg-strong:rgba(34,51,59,0.15);--accent-text:#22333B;
+    --error:#B42318;--success:#2F6B3F;--warning:#8A5A18;--info:#22333B;
     --radius-sm:4px;--radius-md:8px;--radius-card:8px;--radius-lg:12px;--radius-pill:999px;
     --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;
     --font-size-xs:11px;--font-size-sm:12px;--font-size-md:14px;
-    --surface-subtle:rgba(0,0,0,.025);--surface-subtle-hover:rgba(0,0,0,.045);
-    --border-subtle:rgba(0,0,0,.08);--border-muted:rgba(0,0,0,.12);
+    --surface-subtle:rgba(10,9,8,.025);--surface-subtle-hover:rgba(10,9,8,.045);
+    --border-subtle:rgba(10,9,8,.08);--border-muted:rgba(10,9,8,.12);
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:14px;line-height:1.6;
   }
   /* ── Font size modifiers ── */
@@ -64,21 +64,21 @@
   /* App-level base — keeps em/rem values scaling correctly */
   :root[data-font-size="small"] { font-size: 12px; }
   :root[data-font-size="large"] { font-size: 16px; }
-  /* ── Dark mode — neutral Calm Console palette ── */
+  /* ── Dark mode — Coolors earth/slate palette ── */
   :root.dark {
-    --bg:#0D1117;--sidebar:#111827;--border:#27313F;--border2:rgba(230,234,240,0.12);
-    --text:#E6EAF0;--muted:#8B93A1;--accent:#D7B94C;--blue:#78A8FF;--gold:#D7B94C;--code-bg:#161B22;
-    --surface:#111827;--topbar-bg:rgba(17,24,39,.96);--main-bg:rgba(13,17,23,0.72);
-    --focus-ring:rgba(215,185,76,.28);--focus-glow:rgba(215,185,76,.08);
-    --input-bg:rgba(230,234,240,.035);--hover-bg:rgba(230,234,240,.055);
-    --strong:#F8FAFC;--em:#AAB2C0;--code-text:#D7B94C;--code-inline-bg:rgba(230,234,240,.07);--pre-text:#E6EAF0;
-    --accent-hover:#E4C862;--accent-bg:rgba(215,185,76,0.08);--accent-bg-strong:rgba(215,185,76,0.14);--accent-text:#D7B94C;
-    --error:#EF5350;--success:#4CAF50;--warning:#FFA726;--info:#78A8FF;
-    --surface-subtle:rgba(255,255,255,.025);--surface-subtle-hover:rgba(255,255,255,.045);
-    --border-subtle:rgba(255,255,255,.075);--border-muted:rgba(255,255,255,.12);
+    --bg:#0A0908;--sidebar:#22333B;--border:#3B4A50;--border2:rgba(234,224,213,0.16);
+    --text:#EAE0D5;--muted:#C6AC8F;--accent:#C6AC8F;--blue:#C6AC8F;--gold:#C6AC8F;--code-bg:#11100E;
+    --surface:#22333B;--topbar-bg:rgba(34,51,59,.96);--main-bg:rgba(10,9,8,0.72);
+    --focus-ring:rgba(198,172,143,.28);--focus-glow:rgba(198,172,143,.08);
+    --input-bg:rgba(234,224,213,.035);--hover-bg:rgba(234,224,213,.055);
+    --strong:#F7F0E8;--em:#D8C6B2;--code-text:#C6AC8F;--code-inline-bg:rgba(234,224,213,.07);--pre-text:#EAE0D5;
+    --accent-hover:#EAE0D5;--accent-bg:rgba(198,172,143,0.08);--accent-bg-strong:rgba(198,172,143,0.14);--accent-text:#C6AC8F;
+    --error:#F87171;--success:#86C08B;--warning:#E0B15D;--info:#C6AC8F;
+    --surface-subtle:rgba(234,224,213,.025);--surface-subtle-hover:rgba(234,224,213,.045);
+    --border-subtle:rgba(234,224,213,.075);--border-muted:rgba(234,224,213,.12);
   }
-  /* ── Skin: Default (gold — matches base) ── */
-  /* No overrides needed — :root and .dark already use gold accent */
+  /* ── Skin: Default (earth/slate — matches base) ── */
+  /* No overrides needed — :root and .dark already use the Coolors palette */
   /* ── Skin: Ares (red) ── */
   :root[data-skin="ares"]{--accent:#C0392B;--accent-hover:#A93226;--accent-bg:rgba(192,57,43,0.08);--accent-bg-strong:rgba(192,57,43,0.15);--accent-text:#922B21;}
   :root.dark[data-skin="ares"]{--accent:#FF4444;--accent-hover:#CC3333;--accent-bg:rgba(255,68,68,0.08);--accent-bg-strong:rgba(255,68,68,0.15);--accent-text:#FF4444;}
@@ -1948,7 +1948,7 @@ main.main.showing-profiles > #mainProfiles{display:flex;}
   border-color:var(--accent);
   color:#fff;
 }
-:root.dark .provider-card-btn-primary{color:#0D1117;}
+:root.dark .provider-card-btn-primary{color:#0A0908;}
 .provider-card-btn-primary:hover:not(:disabled){
   background:var(--accent-hover);
   border-color:var(--accent-hover);
