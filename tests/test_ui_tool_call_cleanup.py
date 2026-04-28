@@ -72,32 +72,34 @@ def _function_body(src: str, name: str) -> str:
 class TestToolCallGroupingStatic:
     def test_render_messages_wraps_settled_tool_calls_in_collapsible_groups(self):
         fn = _function_body(UI_JS, "renderMessages")
+        helper = _function_body(UI_JS, "ensureActivityGroup")
         assert "tool-call-group" in fn, (
             "Settled tool calls should render inside a single per-turn "
             ".tool-call-group wrapper, not as loose individual rows."
         )
-        assert "data-tool-call-group" in fn, (
+        assert "data-tool-call-group" in helper, (
             "Tool-call groups need a stable data-tool-call-group attribute for "
             "CSS, accessibility, and future behavioural tests."
         )
-        assert re.search(r"cards\.length|toolCalls\.length|group\.length", fn), (
+        assert re.search(r"cards\.length|toolCount|toolCalls\.length|group\.length", fn + helper), (
             "The group header should derive its summary/count from the number "
             "of tool calls in the group."
         )
 
     def test_tool_call_groups_default_collapsed_with_summary_visible(self):
         fn = _function_body(UI_JS, "renderMessages")
+        helper = _function_body(UI_JS, "ensureActivityGroup")
         assert "tool-call-group-collapsed" in fn or "collapsed" in fn, (
             "Historical tool-call groups should default to a collapsed state."
         )
-        assert "tool-call-group-summary" in fn, (
+        assert "tool-call-group-summary" in helper, (
             "Collapsed groups must expose a visible summary/header row."
         )
-        assert "tool-call-group-body" in fn, (
+        assert "tool-call-group-body" in helper, (
             "Tool-card detail rows should live inside a group body that can be "
             "expanded/collapsed."
         )
-        assert "aria-expanded" in fn, (
+        assert "aria-expanded" in helper, (
             "The expand/collapse control must expose aria-expanded."
         )
 
@@ -115,6 +117,31 @@ class TestToolCallGroupingStatic:
         assert "data-live-tid" in live_fn, (
             "Live grouping must preserve data-live-tid so tool_start/tool_complete "
             "updates still replace the correct card."
+        )
+
+    def test_tools_and_thinking_share_one_collapsed_activity_dropdown(self):
+        ui_min = re.sub(r"\s+", "", UI_JS)
+        assert "functionensureActivityGroup(" in ui_min, (
+            "Tool calls and thinking should share one agent-activity disclosure helper."
+        )
+        assert "data-agent-activity-group" in UI_JS, (
+            "The shared tools/thinking disclosure needs a stable data-agent-activity-group hook."
+        )
+        assert "agent-activity-thinking" in UI_JS, (
+            "Thinking content should be nested inside the shared activity dropdown, not rendered separately."
+        )
+        render_fn = _function_body(UI_JS, "renderMessages")
+        assert "seg.insertAdjacentHTML('beforeend', _thinkingCardHtml(thinkingText))" not in render_fn, (
+            "Settled thinking cards should not render as standalone assistant-segment content."
+        )
+
+    def test_live_thinking_uses_shared_activity_dropdown_not_standalone_row(self):
+        live_thinking_fn = _function_body(UI_JS, "appendThinking")
+        assert "ensureActivityGroup" in live_thinking_fn, (
+            "Live thinking should be inserted into the same activity dropdown used by live tools."
+        )
+        assert "thinkingRow" not in live_thinking_fn, (
+            "Live thinking should no longer create a separate #thinkingRow card outside the activity dropdown."
         )
 
 
@@ -179,6 +206,21 @@ class TestToolCardDesignTokens:
         boot_min = re.sub(r"\s+", "", BOOT_JS)
         assert "{name:'Default',colors:['#C6AC8F','#EAE0D5','#22333B']}" in boot_min, (
             "The Default skin swatch should preview the same Coolors palette as the base theme."
+        )
+
+    def test_claude_like_message_typography_splits_user_and_assistant_fonts(self):
+        css_min = re.sub(r"\s+", "", CSS)
+        assert "--font-ui:" in css_min and "--font-assistant:" in css_min, (
+            "Typography should define separate UI/user and assistant font tokens."
+        )
+        assert ".assistant-turn.msg-body{font-family:var(--font-assistant)" in css_min or ".assistant-turn.msg-body" in css_min.replace(" .", "."), (
+            "Assistant prose should use the Claude-like editorial serif stack."
+        )
+        assert ".msg-row[data-role=\"user\"].msg-body{font-family:var(--font-ui)" in css_min, (
+            "User bubbles should keep the sans/UI stack, matching Claude's split typography."
+        )
+        assert "Georgia" in CSS and "system-ui" in CSS, (
+            "Claude-like fallback stacks should include Georgia for assistant prose and system-ui for UI/user text."
         )
 
     def test_tool_card_css_uses_design_tokens_for_chrome(self):

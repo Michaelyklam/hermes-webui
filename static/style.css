@@ -12,9 +12,11 @@
     --radius-sm:4px;--radius-md:8px;--radius-card:8px;--radius-lg:12px;--radius-pill:999px;
     --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;
     --font-size-xs:11px;--font-size-sm:12px;--font-size-md:14px;
+    --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+    --font-assistant:Georgia,"Times New Roman",serif;
     --surface-subtle:rgba(10,9,8,.025);--surface-subtle-hover:rgba(10,9,8,.045);
     --border-subtle:rgba(10,9,8,.08);--border-muted:rgba(10,9,8,.12);
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:14px;line-height:1.6;
+    font-family:var(--font-ui);font-size:14px;line-height:1.6;
   }
   /* ── Font size modifiers ── */
   /* ── Font size preference: scale key UI text elements ── */
@@ -2130,6 +2132,11 @@ main.main.showing-profiles > #mainProfiles{display:flex;}
 /* ── Unified indent rail — every child of a turn lines up on --msg-rail ── */
 .msg-row { padding: 12px 0; }
 .msg-body { padding-left: var(--msg-rail); padding-top: 8px; max-width: var(--msg-max); }
+.assistant-turn .msg-body { font-family: var(--font-assistant); font-size: 15px; line-height: 1.68; letter-spacing: .003em; }
+.assistant-turn .msg-body code,
+.assistant-turn .msg-body pre,
+.assistant-turn .msg-body table { font-family: 'SF Mono', ui-monospace, monospace; }
+.msg-row[data-role="user"] .msg-body { font-family: var(--font-ui); }
 .msg-body:empty { display: none; }
 .assistant-turn { width: 100%; }
 .assistant-turn-blocks { display: flex; flex-direction: column; }
@@ -2151,6 +2158,9 @@ main.main.showing-profiles > #mainProfiles{display:flex;}
 .msg-usage { padding-left: var(--msg-rail); opacity: 1; margin-top: 6px; font-size: 11px; }
 .tool-card { margin-left: var(--msg-rail); max-width: var(--msg-max); }
 .thinking-card { margin-left: var(--msg-rail); max-width: var(--msg-max); }
+.agent-activity-group .tool-card,
+.agent-activity-group .thinking-card { margin-left: 0; max-width: none; }
+.agent-activity-thinking { margin: 2px 0; }
 .tool-cards-toggle { margin-left: var(--msg-rail); }
 .msg-row[data-editing="1"] { width: 100%; }
 .msg-row[data-editing="1"] .msg-edit-area,

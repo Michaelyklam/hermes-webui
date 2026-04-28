@@ -16,15 +16,20 @@ colors:
   error: "#F87171"
 typography:
   body-md:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
-    fontSize: 14px
+    fontFamily: "Georgia, Times New Roman, serif"
+    fontSize: 15px
     fontWeight: 400
-    lineHeight: 1.6
+    lineHeight: 1.68
   body-sm:
-    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, system-ui, sans-serif"
+    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Inter, system-ui, sans-serif"
     fontSize: 12px
     fontWeight: 400
     lineHeight: 1.45
+  user-message:
+    fontFamily: "-apple-system, BlinkMacSystemFont, Segoe UI, Inter, system-ui, sans-serif"
+    fontSize: 14px
+    fontWeight: 400
+    lineHeight: 1.55
   mono-xs:
     fontFamily: "SF Mono, ui-monospace, monospace"
     fontSize: 11px
@@ -105,7 +110,7 @@ The desired direction is Linear/Vercel precision with a little Claude-style conv
 
 ## Typography
 
-Use the system sans stack for UI and conversation. Use monospace only for code, file paths, commands, tool names, and compact metadata. Avoid making whole cards feel like terminal output unless they actually are logs.
+Use Claude-like split typography: assistant prose gets an editorial serif stack (Georgia as the available substitute for Anthropic Serif), while user bubbles and functional UI stay in a crisp sans stack. This keeps the bot voice calmer and more readable without making controls feel bookish. Use monospace only for code, file paths, commands, tool names, and compact metadata. Avoid making whole cards feel like terminal output unless they actually are logs.
 
 Scale should stay tight: 11px metadata, 12px labels, 14px body, 16–18px headings. Do not proliferate 10px/10.5px/12.5px one-offs unless there is a real layout constraint.
 
@@ -133,9 +138,9 @@ Use almost no shadows in the transcript. Shadows are reserved for popovers, drop
 
 ## Components
 
-### Tool-call group
+### Tool/thinking activity group
 
-Collapsed by default in settled history. Summary line shows count and names: `Used 4 tools · read_file, patch, terminal`. Expanding reveals individual tool cards. Live runs may stay expanded while active, then collapse when settled.
+Collapsed by default in settled history and during live runs. Summary line uses one disclosure for internals, e.g. `Activity: thinking + 4 tools · read_file, patch, terminal`. Expanding reveals thinking and individual tool cards together. Thinking and tools should not create separate transcript rows unless there is an error or approval state that needs attention.
 
 ### Tool card
 

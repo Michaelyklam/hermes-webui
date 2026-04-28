@@ -2225,6 +2225,33 @@ function _thinkingCardHtml(text){
   const clean=_sanitizeThinkingDisplayText(text);
   return `<div class="thinking-card"><div class="thinking-card-header" onclick="this.parentElement.classList.toggle('open')"><span class="thinking-card-icon">${li('lightbulb',14)}</span><span class="thinking-card-label">${t('thinking')}</span><span class="thinking-card-toggle">${li('chevron-right',12)}</span></div><div class="thinking-card-body"><pre>${esc(clean)}</pre></div></div>`;
 }
+function _thinkingActivityNode(text){
+  const row=document.createElement('div');
+  row.className='agent-activity-thinking';
+  row.innerHTML=_thinkingCardHtml(text);
+  return row;
+}
+function ensureActivityGroup(inner, opts){
+  opts=opts||{};
+  if(!inner) return null;
+  const live=!!opts.live;
+  const selector=live?'.tool-call-group[data-live-tool-call-group="1"]':'.tool-call-group[data-agent-activity-group="1"]';
+  let group=inner.querySelector(selector);
+  if(!group){
+    group=document.createElement('div');
+    const collapsed=opts.collapsed!==false;
+    group.className='tool-call-group agent-activity-group'+(collapsed?' tool-call-group-collapsed':'');
+    group.setAttribute('data-tool-call-group','1');
+    group.setAttribute('data-agent-activity-group','1');
+    if(live) group.setAttribute('data-live-tool-call-group','1');
+    group.innerHTML=`<button type="button" class="tool-call-group-summary" aria-expanded="${collapsed?'false':'true'}" onclick="const g=this.closest('.tool-call-group');const c=g.classList.toggle('tool-call-group-collapsed');this.setAttribute('aria-expanded',String(!c));"><span class="tool-call-group-chevron">${li('chevron-right',12)}</span><span class="tool-call-group-label">Activity</span><span class="tool-call-group-list">tools / thinking</span><span class="tool-call-group-count">0</span></button><div class="tool-call-group-body"></div>`;
+    const anchor=opts.anchor||null;
+    if(anchor&&anchor.parentElement===inner) anchor.insertAdjacentElement('afterend', group);
+    else inner.appendChild(group);
+  }
+  _syncToolCallGroupSummary(group);
+  return group;
+}
 function _compressionStateForCurrentSession(){
   const state=window._compressionUi;
   if(!state||!S.session||state.sessionId!==S.session.session_id) return null;
@@ -2579,6 +2606,7 @@ function renderMessages(){
   let _prevSepKey=null;
   let currentAssistantTurn=null;
   const assistantSegments=new Map();
+  const assistantThinking=new Map();
   const userRows=new Map();
   for(let vi=0;vi<visWithIdx.length;vi++){
     const {m,rawIdx}=visWithIdx[vi];
@@ -2696,11 +2724,11 @@ function renderMessages(){
       seg.setAttribute('data-live-assistant','1');
     }
     if(_ERR_MSG_RE.test(String(content||'').trim())) seg.dataset.error='1';
-    if(thinkingText&&window._showThinking!==false) seg.insertAdjacentHTML('beforeend', _thinkingCardHtml(thinkingText));
+    if(thinkingText&&window._showThinking!==false) assistantThinking.set(rawIdx, thinkingText);
     const hasVisibleBody=!!(String(content||'').trim()||filesHtml);
     if(hasVisibleBody){
       seg.insertAdjacentHTML('beforeend', `${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`);
-    }else if(!thinkingText){
+    }else{
       seg.classList.add('assistant-segment-anchor');
     }
     _assistantTurnBlocks(currentAssistantTurn).appendChild(seg);
@@ -2814,18 +2842,19 @@ function renderMessages(){
     });
     if(derived.length) S.toolCalls=derived;
   }
-  if(!S.busy && S.toolCalls && S.toolCalls.length){
+  if(!S.busy){
     inner.querySelectorAll('.tool-call-group:not([data-compression-card]),.tool-card-row:not([data-compression-card])').forEach(el=>el.remove());
     const byAssistant = {};
-    for(const tc of S.toolCalls){
+    for(const tc of (S.toolCalls||[])){
       const key = tc.assistant_msg_idx !== undefined ? tc.assistant_msg_idx : -1;
       if(!byAssistant[key]) byAssistant[key] = [];
       byAssistant[key].push(tc);
     }
     const assistantIdxs=[...assistantSegments.keys()].sort((a,b)=>a-b);
+    const activityIdxs=[...new Set([...Object.keys(byAssistant).map(k=>parseInt(k)), ...assistantThinking.keys()])].sort((a,b)=>a-b);
     const anchorInsertAfter = new Map();
-    for(const [key, cards] of Object.entries(byAssistant)){
-      const aIdx = parseInt(key);
+    for(const aIdx of activityIdxs){
+      const cards=byAssistant[aIdx]||[];
       let anchorRow=assistantSegments.get(aIdx)||null;
       if(!anchorRow&&assistantIdxs.length){
         const fallbackIdx=[...assistantIdxs].reverse().find(idx=>idx<=aIdx);
@@ -2833,22 +2862,16 @@ function renderMessages(){
       }
       if(!anchorRow) continue;
       const anchorParent=anchorRow.parentElement;
-      const group=document.createElement('div');
-      group.className='tool-call-group tool-call-group-collapsed';
-      group.setAttribute('data-tool-call-group','1');
-      const names=cards.map(tc=>_toolDisplayName(tc)).filter(Boolean);
-      const uniqueNames=[...new Set(names)];
-      const toolCalls=cards.length;
-      const list=uniqueNames.slice(0,5).join(', ')+(uniqueNames.length>5?'…':'');
-      group.innerHTML=`<button type="button" class="tool-call-group-summary" aria-expanded="false" onclick="const g=this.closest('.tool-call-group');const c=g.classList.toggle('tool-call-group-collapsed');this.setAttribute('aria-expanded',String(!c));"><span class="tool-call-group-chevron">${li('chevron-right',12)}</span><span class="tool-call-group-label">Used ${toolCalls} tool${toolCalls===1?'':'s'}</span><span class="tool-call-group-list">${esc(list)}</span><span class="tool-call-group-count">${toolCalls}</span></button><div class="tool-call-group-body"></div>`;
-      const body=group.querySelector('.tool-call-group-body');
+      const insertAfterNode = anchorInsertAfter.get(anchorRow) || anchorRow;
+      const group=ensureActivityGroup(anchorParent,{collapsed:true,anchor:insertAfterNode});
+      const body=group&&group.querySelector('.tool-call-group-body');
+      if(!body) continue;
+      const thinkingText=assistantThinking.get(aIdx);
+      if(thinkingText) body.appendChild(_thinkingActivityNode(thinkingText));
       for(const tc of cards){
         body.appendChild(buildToolCard(tc));
       }
-      const insertAfterNode = anchorInsertAfter.get(anchorRow) || anchorRow;
-      const refNode = insertAfterNode ? insertAfterNode.nextSibling : null;
-      if(refNode) anchorParent.insertBefore(group,refNode);
-      else anchorParent.appendChild(group);
+      _syncToolCallGroupSummary(group);
       if(anchorRow) anchorInsertAfter.set(anchorRow, group);
     }
   }
@@ -2984,7 +3007,8 @@ function buildToolCard(tc){
 function _syncToolCallGroupSummary(group){
   if(!group) return;
   const cards=Array.from(group.querySelectorAll('.tool-card-row .tool-card'));
-  const count=cards.length;
+  const toolCount=cards.length;
+  const thinkingCount=group.querySelectorAll('.agent-activity-thinking .thinking-card').length;
   const names=cards.map(card=>{
     const el=card.querySelector('.tool-card-name');
     return el?String(el.textContent||'').trim():'';
@@ -2993,9 +3017,18 @@ function _syncToolCallGroupSummary(group){
   const label=group.querySelector('.tool-call-group-label');
   const list=group.querySelector('.tool-call-group-list');
   const badge=group.querySelector('.tool-call-group-count');
-  if(label) label.textContent=count?`Using ${count} tool${count===1?'':'s'}`:'Using tools';
-  if(list) list.textContent=uniqueNames.slice(0,5).join(', ')+(uniqueNames.length>5?'…':'');
-  if(badge) badge.textContent=String(count);
+  const parts=[];
+  if(thinkingCount) parts.push('thinking');
+  if(uniqueNames.length) parts.push(uniqueNames.slice(0,5).join(', ')+(uniqueNames.length>5?'…':''));
+  const total=toolCount+thinkingCount;
+  if(label){
+    if(thinkingCount&&toolCount) label.textContent=`Activity: thinking + ${toolCount} tool${toolCount===1?'':'s'}`;
+    else if(thinkingCount) label.textContent='Activity: thinking';
+    else if(toolCount) label.textContent=`Activity: ${toolCount} tool${toolCount===1?'':'s'}`;
+    else label.textContent='Activity';
+  }
+  if(list) list.textContent=parts.join(' · ')||'tools / thinking';
+  if(badge) badge.textContent=String(total);
 }
 
 // ── Live tool card helpers (called during SSE streaming) ──
@@ -3011,24 +3044,16 @@ function appendLiveToolCard(tc){
   if(!S.session||!S.activeStreamId) return;
   let turn=$('liveAssistantTurn');
   if(!turn){
-    appendThinking();
-    turn=$('liveAssistantTurn');
+    turn=_createAssistantTurn();
+    turn.id='liveAssistantTurn';
+    $('msgInner').appendChild(turn);
   }
   const inner=_assistantTurnBlocks(turn);
   if(!inner) return;
   const tid=tc.tid||'';
-  let group=inner.querySelector('.tool-call-group[data-live-tool-call-group="1"]');
-  if(!group){
-    group=document.createElement('div');
-    group.className='tool-call-group';
-    group.setAttribute('data-tool-call-group','1');
-    group.setAttribute('data-live-tool-call-group','1');
-    group.innerHTML=`<button type="button" class="tool-call-group-summary" aria-expanded="true" onclick="const g=this.closest('.tool-call-group');const c=g.classList.toggle('tool-call-group-collapsed');this.setAttribute('aria-expanded',String(!c));"><span class="tool-call-group-chevron">${li('chevron-right',12)}</span><span class="tool-call-group-label">Using tools</span><span class="tool-call-group-list"></span><span class="tool-call-group-count">0</span></button><div class="tool-call-group-body"></div>`;
-    const children=Array.from(inner.children);
-    const anchor=children.filter(el=>el.matches('[data-live-assistant="1"],.tool-call-group,.tool-card-row,.thinking-card-row')).pop();
-    if(anchor) anchor.insertAdjacentElement('afterend', group);
-    else inner.appendChild(group);
-  }
+  const children=Array.from(inner.children);
+  const anchor=children.filter(el=>el.matches('[data-live-assistant="1"],.tool-call-group,.tool-card-row,.agent-activity-thinking')).pop();
+  const group=ensureActivityGroup(inner,{live:true,collapsed:false,anchor});
   const body=group.querySelector('.tool-call-group-body');
   // Update existing card in place (tool_complete after tool_start)
   if(tid){
@@ -3440,29 +3465,20 @@ function renderKatexBlocks(){
 function _thinkingMarkup(text=''){
   const clean=_sanitizeThinkingDisplayText(text);
   return (clean&&String(clean).trim())
-    ? `<div class="thinking-card open"><div class="thinking-card-header" onclick="this.parentElement.classList.toggle('open')"><span class="thinking-card-icon">${li('lightbulb',14)}</span><span class="thinking-card-label">${t('thinking')}</span><span class="thinking-card-toggle">${li('chevron-right',12)}</span></div><div class="thinking-card-body"><pre>${esc(String(clean).trim())}</pre></div></div>`
+    ? `<div class="thinking-card"><div class="thinking-card-header" onclick="this.parentElement.classList.toggle('open')"><span class="thinking-card-icon">${li('lightbulb',14)}</span><span class="thinking-card-label">${t('thinking')}</span><span class="thinking-card-toggle">${li('chevron-right',12)}</span></div><div class="thinking-card-body"><pre>${esc(String(clean).trim())}</pre></div></div>`
     : `<div class="thinking"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
 }
 function finalizeThinkingCard(){
-  const row=$('thinkingRow');
-  if(!row) return;
-  // If the row is still just a spinner (no thinking content rendered),
-  // remove it entirely — it's the initial waiting dots.
-  const hasContent=row.querySelector('.thinking-card') || row.classList.contains('thinking-card-row');
-  if(!hasContent && row.getAttribute('data-thinking-active')==='1'){
-    row.remove();
-    return;
+  const turn=$('liveAssistantTurn');
+  const group=turn&&turn.querySelector('.tool-call-group[data-live-tool-call-group="1"]');
+  if(group){
+    group.classList.add('tool-call-group-collapsed');
+    const summary=group.querySelector('.tool-call-group-summary');
+    if(summary) summary.setAttribute('aria-expanded','false');
+    const active=group.querySelector('.agent-activity-thinking[data-thinking-active="1"]');
+    if(active) active.removeAttribute('data-thinking-active');
+    _syncToolCallGroupSummary(group);
   }
-  // If the user was watching (scroll pinned = at bottom), scroll the thinking
-  // card back to the top so the completed response is visible underneath without
-  // the thinking content blocking it. If they scrolled up to read history,
-  // leave their scroll position intact.
-  if(_scrollPinned){
-    const body=row&&row.querySelector('.thinking-card-body');
-    if(body) body.scrollTop=0;
-  }
-  row.removeAttribute('id');
-  row.removeAttribute('data-thinking-active');
 }
 function appendThinking(text=''){
   // Guard: ignore if session was switched during an async SSE stream.
@@ -3477,40 +3493,43 @@ function appendThinking(text=''){
     $('msgInner').appendChild(turn);
   }
   const blocks=_assistantTurnBlocks(turn);
-  let row=$('thinkingRow');
+  if(!blocks) return;
+  if(!String(text||'').trim()){
+    scrollIfPinned();
+    return;
+  }
+  const allChildren=Array.from(blocks.children);
+  const anchor=allChildren.filter(el=>
+    el.id!=='toolRunningRow' &&
+    el.matches('[data-live-assistant="1"],.tool-call-group,.tool-card-row,.agent-activity-thinking')
+  ).pop();
+  const group=ensureActivityGroup(blocks,{live:true,collapsed:true,anchor});
+  const body=group&&group.querySelector('.tool-call-group-body');
+  if(!body) return;
+  let row=body.querySelector('.agent-activity-thinking[data-thinking-active="1"]');
   if(!row){
     row=document.createElement('div');
-    row.className='assistant-segment';
-    row.id='thinkingRow';
+    row.className='agent-activity-thinking';
     row.setAttribute('data-thinking-active','1');
-    // Insert after whichever comes last: a live assistant segment or a tool card.
-    // This mirrors appendLiveToolCard's anchor logic so thinking always appears
-    // in the right position in the interleaved sequence.
-    // Also skip #toolRunningRow (dots) — thinking should go before dots, not after.
-    const allChildren=Array.from(blocks.children);
-    const anchor=allChildren.filter(el=>
-      el.id!=='toolRunningRow' &&
-      el.matches('[data-live-assistant="1"],.tool-card-row')
-    ).pop();
-    if(anchor) anchor.insertAdjacentElement('afterend', row);
-    else blocks.appendChild(row);
+    body.insertBefore(row, body.firstChild);
   }
-  row.className=(text&&String(text).trim())?'assistant-segment thinking-card-row':'assistant-segment';
   row.innerHTML=_thinkingMarkup(text);
+  _syncToolCallGroupSummary(group);
   scrollIfPinned();
-  // Auto-scroll the thinking card body to bottom if the user is watching
-  // (scroll pinned). If the user scrolled up to read history, leave it alone.
   if(_scrollPinned){
-    const body=row&&row.querySelector('.thinking-card-body');
-    if(body) body.scrollTop=body.scrollHeight;
+    const thinkingBody=row&&row.querySelector('.thinking-card-body');
+    if(thinkingBody) thinkingBody.scrollTop=thinkingBody.scrollHeight;
   }
 }
 function updateThinking(text=''){appendThinking(text);}
 function removeThinking(){
-  const el=$('thinkingRow');
-  if(el) el.remove();
   const turn=$('liveAssistantTurn');
   const blocks=_assistantTurnBlocks(turn);
+  if(blocks) blocks.querySelectorAll('.agent-activity-thinking').forEach(el=>el.remove());
+  if(blocks) blocks.querySelectorAll('.tool-call-group[data-agent-activity-group="1"]').forEach(group=>{
+    _syncToolCallGroupSummary(group);
+    if(!group.querySelector('.tool-card-row,.agent-activity-thinking')) group.remove();
+  });
   if(turn&&blocks&&!blocks.children.length) turn.remove();
 }
 
