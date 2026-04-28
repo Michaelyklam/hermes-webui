@@ -133,6 +133,35 @@ class TestToolCardDesignTokens:
         ):
             assert token in CSS, f"Missing design token {token} in style.css"
 
+    def test_default_dark_palette_implements_calm_console_tokens(self):
+        css_min = re.sub(r"\s+", "", CSS)
+        expected_tokens = (
+            "--bg:#0D1117",
+            "--sidebar:#111827",
+            "--border:#27313F",
+            "--text:#E6EAF0",
+            "--muted:#8B93A1",
+            "--accent:#D7B94C",
+            "--surface:#111827",
+            "--topbar-bg:rgba(17,24,39,.96)",
+        )
+        for token in expected_tokens:
+            assert token in css_min, f"Calm Console palette token missing: {token}"
+
+    def test_light_palette_is_neutral_not_gold_tinted(self):
+        css_min = re.sub(r"\s+", "", CSS)
+        expected_tokens = (
+            "--bg:#F8FAFC",
+            "--sidebar:#FFFFFF",
+            "--border:#E2E8F0",
+            "--text:#0F172A",
+            "--muted:#64748B",
+            "--accent:#8A6F2A",
+            "--surface:#F1F5F9",
+        )
+        for token in expected_tokens:
+            assert token in css_min, f"Neutral light palette token missing: {token}"
+
     def test_tool_card_css_uses_design_tokens_for_chrome(self):
         css_min = re.sub(r"\s+", "", CSS)
         assert ".tool-card{" in css_min, ".tool-card rule missing"
