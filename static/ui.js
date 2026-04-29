@@ -2225,6 +2225,9 @@ function _thinkingCardHtml(text){
   const clean=_sanitizeThinkingDisplayText(text);
   return `<div class="thinking-card"><div class="thinking-card-header" onclick="this.parentElement.classList.toggle('open')"><span class="thinking-card-icon">${li('lightbulb',14)}</span><span class="thinking-card-label">${t('thinking')}</span><span class="thinking-card-toggle">${li('chevron-right',12)}</span></div><div class="thinking-card-body"><pre>${esc(clean)}</pre></div></div>`;
 }
+function isSimplifiedToolCalling(){
+  return window._simplifiedToolCalling!==false;
+}
 function _thinkingActivityNode(text){
   const row=document.createElement('div');
   row.className='agent-activity-thinking';
@@ -2516,6 +2519,10 @@ function renderCompressionUi(){
 // for the common read-only back-navigation case; not suitable as a general cache.
 const _sessionHtmlCache=new Map();
 let _sessionHtmlCacheSid=null; // session_id currently rendered in the DOM
+function clearMessageRenderCache(){
+  _sessionHtmlCache.clear();
+  _sessionHtmlCacheSid=null;
+}
 
 function renderMessages(){
   const inner=$('msgInner');
@@ -2724,11 +2731,14 @@ function renderMessages(){
       seg.setAttribute('data-live-assistant','1');
     }
     if(_ERR_MSG_RE.test(String(content||'').trim())) seg.dataset.error='1';
-    if(thinkingText&&window._showThinking!==false) assistantThinking.set(rawIdx, thinkingText);
+    if(thinkingText&&window._showThinking!==false){
+      if(isSimplifiedToolCalling()) assistantThinking.set(rawIdx, thinkingText);
+      else seg.insertAdjacentHTML('beforeend', _thinkingCardHtml(thinkingText));
+    }
     const hasVisibleBody=!!(String(content||'').trim()||filesHtml);
     if(hasVisibleBody){
       seg.insertAdjacentHTML('beforeend', `${filesHtml}<div class="msg-body">${bodyHtml}</div>${footHtml}`);
-    }else{
+    }else if(!(thinkingText&&window._showThinking!==false&&!isSimplifiedToolCalling())){
       seg.classList.add('assistant-segment-anchor');
     }
     _assistantTurnBlocks(currentAssistantTurn).appendChild(seg);
@@ -2851,28 +2861,69 @@ function renderMessages(){
       byAssistant[key].push(tc);
     }
     const assistantIdxs=[...assistantSegments.keys()].sort((a,b)=>a-b);
-    const activityIdxs=[...new Set([...Object.keys(byAssistant).map(k=>parseInt(k)), ...assistantThinking.keys()])].sort((a,b)=>a-b);
     const anchorInsertAfter = new Map();
-    for(const aIdx of activityIdxs){
-      const cards=byAssistant[aIdx]||[];
-      let anchorRow=assistantSegments.get(aIdx)||null;
-      if(!anchorRow&&assistantIdxs.length){
-        const fallbackIdx=[...assistantIdxs].reverse().find(idx=>idx<=aIdx);
-        anchorRow=fallbackIdx!==undefined?assistantSegments.get(fallbackIdx):assistantSegments.get(assistantIdxs[assistantIdxs.length-1]);
+    if(isSimplifiedToolCalling()){
+      const activityIdxs=[...new Set([...Object.keys(byAssistant).map(k=>parseInt(k)), ...assistantThinking.keys()])].sort((a,b)=>a-b);
+      for(const aIdx of activityIdxs){
+        const cards=byAssistant[aIdx]||[];
+        let anchorRow=assistantSegments.get(aIdx)||null;
+        if(!anchorRow&&assistantIdxs.length){
+          const fallbackIdx=[...assistantIdxs].reverse().find(idx=>idx<=aIdx);
+          anchorRow=fallbackIdx!==undefined?assistantSegments.get(fallbackIdx):assistantSegments.get(assistantIdxs[assistantIdxs.length-1]);
+        }
+        if(!anchorRow) continue;
+        const anchorParent=anchorRow.parentElement;
+        const insertAfterNode = anchorInsertAfter.get(anchorRow) || anchorRow;
+        const group=ensureActivityGroup(anchorParent,{collapsed:true,anchor:insertAfterNode});
+        const body=group&&group.querySelector('.tool-call-group-body');
+        if(!body) continue;
+        const thinkingText=assistantThinking.get(aIdx);
+        if(thinkingText) body.appendChild(_thinkingActivityNode(thinkingText));
+        for(const tc of cards){
+          body.appendChild(buildToolCard(tc));
+        }
+        _syncToolCallGroupSummary(group);
+        if(anchorRow) anchorInsertAfter.set(anchorRow, group);
       }
-      if(!anchorRow) continue;
-      const anchorParent=anchorRow.parentElement;
-      const insertAfterNode = anchorInsertAfter.get(anchorRow) || anchorRow;
-      const group=ensureActivityGroup(anchorParent,{collapsed:true,anchor:insertAfterNode});
-      const body=group&&group.querySelector('.tool-call-group-body');
-      if(!body) continue;
-      const thinkingText=assistantThinking.get(aIdx);
-      if(thinkingText) body.appendChild(_thinkingActivityNode(thinkingText));
-      for(const tc of cards){
-        body.appendChild(buildToolCard(tc));
+    }else if(S.toolCalls && S.toolCalls.length){
+      for(const [key, cards] of Object.entries(byAssistant)){
+        const aIdx = parseInt(key);
+        let anchorRow=assistantSegments.get(aIdx)||null;
+        if(!anchorRow&&assistantIdxs.length){
+          const fallbackIdx=[...assistantIdxs].reverse().find(idx=>idx<=aIdx);
+          anchorRow=fallbackIdx!==undefined?assistantSegments.get(fallbackIdx):assistantSegments.get(assistantIdxs[assistantIdxs.length-1]);
+        }
+        if(!anchorRow) continue;
+        const anchorParent=anchorRow.parentElement;
+        const frag=document.createDocumentFragment();
+        let lastInsertedNode=null;
+        for(const tc of cards){
+          const card=buildToolCard(tc);
+          frag.appendChild(card);
+          lastInsertedNode=card;
+        }
+        // Add expand/collapse toggle for groups with 2+ cards
+        if(cards.length>=2){
+          const toggle=document.createElement('div');
+          toggle.className='tool-cards-toggle';
+          // Collect card elements before they get moved to DOM
+          const cardEls=Array.from(frag.querySelectorAll('.tool-card'));
+          const expandBtn=document.createElement('button');
+          expandBtn.textContent=t('expand_all');
+          expandBtn.onclick=()=>cardEls.forEach(c=>c.classList.add('open'));
+          const collapseBtn=document.createElement('button');
+          collapseBtn.textContent=t('collapse_all');
+          collapseBtn.onclick=()=>cardEls.forEach(c=>c.classList.remove('open'));
+          toggle.appendChild(expandBtn);
+          toggle.appendChild(collapseBtn);
+          frag.insertBefore(toggle,frag.firstChild);
+        }
+        const insertAfterNode = anchorInsertAfter.get(anchorRow) || anchorRow;
+        const refNode = insertAfterNode ? insertAfterNode.nextSibling : null;
+        if(refNode) anchorParent.insertBefore(frag,refNode);
+        else anchorParent.appendChild(frag);
+        if(anchorRow&&lastInsertedNode) anchorInsertAfter.set(anchorRow, lastInsertedNode);
       }
-      _syncToolCallGroupSummary(group);
-      if(anchorRow) anchorInsertAfter.set(anchorRow, group);
     }
   }
   // Render per-turn token usage on each assistant message that has it (#503).
@@ -3051,6 +3102,44 @@ function appendLiveToolCard(tc){
   const inner=_assistantTurnBlocks(turn);
   if(!inner) return;
   const tid=tc.tid||'';
+  if(!isSimplifiedToolCalling()){
+    // Update existing card in place (tool_complete after tool_start)
+    if(tid){
+      const existing=inner.querySelector(`.tool-card-row[data-live-tid="${CSS.escape(tid)}"]`);
+      if(existing){
+        const replacement=buildToolCard(tc);
+        replacement.dataset.liveTid=tid;
+        existing.replaceWith(replacement);
+        // Keep #toolRunningRow alive — dots stay until text starts streaming
+        // or the next tool fires (which replaces them). Removing here caused
+        // a gap between tool completion and the first text token arriving.
+        return;
+      }
+    }
+    const row=buildToolCard(tc);
+    if(tid) row.dataset.liveTid=tid;
+    // Insert after whichever comes last: the current live assistant segment or
+    // the last tool card. This handles both cases:
+    //   text → tool1 → tool2  (no text between tools: anchor is card1)
+    //   text1 → tool1 → text2 → tool2  (text between tools: anchor is text2)
+    const children=Array.from(inner.children);
+    // Include .thinking-card-row so tool cards land AFTER a finalized thinking
+    // card, not between the text segment and thinking.
+    const anchor=children.filter(el=>el.matches('[data-live-assistant="1"],.tool-card-row,.thinking-card-row')).pop();
+    if(anchor) anchor.insertAdjacentElement('afterend', row);
+    else inner.appendChild(row);
+    // Add a 3-dot waiting indicator below the tool card so there's visual
+    // feedback while the tool is running. Removed when text starts streaming
+    // (ensureAssistantRow) or when tool_complete fires.
+    const oldWait=$('toolRunningRow');if(oldWait)oldWait.remove();
+    const waitRow=document.createElement('div');
+    waitRow.id='toolRunningRow';
+    waitRow.className='assistant-segment';
+    waitRow.innerHTML='<div class="thinking"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
+    row.insertAdjacentElement('afterend', waitRow);
+    if(typeof scrollIfPinned==='function') scrollIfPinned();
+    return;
+  }
   const children=Array.from(inner.children);
   const anchor=children.filter(el=>el.matches('[data-live-assistant="1"],.tool-call-group,.tool-card-row,.agent-activity-thinking')).pop();
   const group=ensureActivityGroup(inner,{live:true,collapsed:false,anchor});
@@ -3464,11 +3553,34 @@ function renderKatexBlocks(){
 
 function _thinkingMarkup(text=''){
   const clean=_sanitizeThinkingDisplayText(text);
+  const openClass=isSimplifiedToolCalling()?'':' open';
   return (clean&&String(clean).trim())
-    ? `<div class="thinking-card"><div class="thinking-card-header" onclick="this.parentElement.classList.toggle('open')"><span class="thinking-card-icon">${li('lightbulb',14)}</span><span class="thinking-card-label">${t('thinking')}</span><span class="thinking-card-toggle">${li('chevron-right',12)}</span></div><div class="thinking-card-body"><pre>${esc(String(clean).trim())}</pre></div></div>`
+    ? `<div class="thinking-card${openClass}"><div class="thinking-card-header" onclick="this.parentElement.classList.toggle('open')"><span class="thinking-card-icon">${li('lightbulb',14)}</span><span class="thinking-card-label">${t('thinking')}</span><span class="thinking-card-toggle">${li('chevron-right',12)}</span></div><div class="thinking-card-body"><pre>${esc(String(clean).trim())}</pre></div></div>`
     : `<div class="thinking"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
 }
 function finalizeThinkingCard(){
+  if(!isSimplifiedToolCalling()){
+    const row=$('thinkingRow');
+    if(!row) return;
+    // If the row is still just a spinner (no thinking content rendered),
+    // remove it entirely — it's the initial waiting dots.
+    const hasContent=row.querySelector('.thinking-card') || row.classList.contains('thinking-card-row');
+    if(!hasContent && row.getAttribute('data-thinking-active')==='1'){
+      row.remove();
+      return;
+    }
+    // If the user was watching (scroll pinned = at bottom), scroll the thinking
+    // card back to the top so the completed response is visible underneath without
+    // the thinking content blocking it. If they scrolled up to read history,
+    // leave their scroll position intact.
+    if(_scrollPinned){
+      const body=row&&row.querySelector('.thinking-card-body');
+      if(body) body.scrollTop=0;
+    }
+    row.removeAttribute('id');
+    row.removeAttribute('data-thinking-active');
+    return;
+  }
   const turn=$('liveAssistantTurn');
   const group=turn&&turn.querySelector('.tool-call-group[data-live-tool-call-group="1"]');
   if(group){
@@ -3494,6 +3606,36 @@ function appendThinking(text=''){
   }
   const blocks=_assistantTurnBlocks(turn);
   if(!blocks) return;
+  if(!isSimplifiedToolCalling()){
+    let row=$('thinkingRow');
+    if(!row){
+      row=document.createElement('div');
+      row.className='assistant-segment';
+      row.id='thinkingRow';
+      row.setAttribute('data-thinking-active','1');
+      // Insert after whichever comes last: a live assistant segment or a tool card.
+      // This mirrors appendLiveToolCard's anchor logic so thinking always appears
+      // in the right position in the interleaved sequence.
+      // Also skip #toolRunningRow (dots) — thinking should go before dots, not after.
+      const allChildren=Array.from(blocks.children);
+      const anchor=allChildren.filter(el=>
+        el.id!=='toolRunningRow' &&
+        el.matches('[data-live-assistant="1"],.tool-card-row')
+      ).pop();
+      if(anchor) anchor.insertAdjacentElement('afterend', row);
+      else blocks.appendChild(row);
+    }
+    row.className=(text&&String(text).trim())?'assistant-segment thinking-card-row':'assistant-segment';
+    row.innerHTML=_thinkingMarkup(text);
+    scrollIfPinned();
+    // Auto-scroll the thinking card body to bottom if the user is watching
+    // (scroll pinned). If the user scrolled up to read history, leave it alone.
+    if(_scrollPinned){
+      const body=row&&row.querySelector('.thinking-card-body');
+      if(body) body.scrollTop=body.scrollHeight;
+    }
+    return;
+  }
   if(!String(text||'').trim()){
     scrollIfPinned();
     return;
@@ -3523,6 +3665,14 @@ function appendThinking(text=''){
 }
 function updateThinking(text=''){appendThinking(text);}
 function removeThinking(){
+  if(!isSimplifiedToolCalling()){
+    const el=$('thinkingRow');
+    if(el) el.remove();
+    const turn=$('liveAssistantTurn');
+    const blocks=_assistantTurnBlocks(turn);
+    if(turn&&blocks&&!blocks.children.length) turn.remove();
+    return;
+  }
   const turn=$('liveAssistantTurn');
   const blocks=_assistantTurnBlocks(turn);
   if(blocks) blocks.querySelectorAll('.agent-activity-thinking').forEach(el=>el.remove());

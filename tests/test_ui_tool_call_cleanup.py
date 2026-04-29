@@ -70,20 +70,32 @@ def _function_body(src: str, name: str) -> str:
 
 
 class TestToolCallGroupingStatic:
-    def test_render_messages_wraps_settled_tool_calls_in_collapsible_groups(self):
+    def test_simplified_tool_calling_setting_is_wired_through_frontend(self):
+        assert "settingsSimplifiedToolCalling" in (REPO / "static" / "index.html").read_text(encoding="utf-8"), (
+            "Settings should expose a Simplified tool calling checkbox."
+        )
+        assert "window._simplifiedToolCalling" in (REPO / "static" / "boot.js").read_text(encoding="utf-8"), (
+            "Boot should hydrate simplified_tool_calling into a runtime flag."
+        )
+        panels = (REPO / "static" / "panels.js").read_text(encoding="utf-8")
+        assert "settingsSimplifiedToolCalling" in panels and "simplified_tool_calling" in panels, (
+            "Settings panel should load and save the simplified_tool_calling setting."
+        )
+
+    def test_render_messages_gates_settled_activity_grouping(self):
         fn = _function_body(UI_JS, "renderMessages")
         helper = _function_body(UI_JS, "ensureActivityGroup")
-        assert "tool-call-group" in fn, (
-            "Settled tool calls should render inside a single per-turn "
-            ".tool-call-group wrapper, not as loose individual rows."
+        assert "isSimplifiedToolCalling()" in fn, (
+            "Settled tool/thinking grouping should be gated by the Simplified tool calling toggle."
+        )
+        assert "tool-cards-toggle" in fn, (
+            "The non-simplified path should preserve the upstream loose tool-card controls."
         )
         assert "data-tool-call-group" in helper, (
-            "Tool-call groups need a stable data-tool-call-group attribute for "
-            "CSS, accessibility, and future behavioural tests."
+            "Tool-call groups need a stable data-tool-call-group attribute for CSS and tests."
         )
         assert re.search(r"cards\.length|toolCount|toolCalls\.length|group\.length", fn + helper), (
-            "The group header should derive its summary/count from the number "
-            "of tool calls in the group."
+            "The simplified group header should derive its summary/count from the number of tool calls."
         )
 
     def test_tool_call_groups_default_collapsed_with_summary_visible(self):
@@ -103,20 +115,23 @@ class TestToolCallGroupingStatic:
             "The expand/collapse control must expose aria-expanded."
         )
 
-    def test_live_tool_cards_use_same_grouping_path_as_settled_cards(self):
+    def test_live_tool_cards_use_grouping_only_when_simplified(self):
         live_fn = _function_body(UI_JS, "appendLiveToolCard")
         settled_fn = _function_body(UI_JS, "renderMessages")
-        assert "tool-call-group" in live_fn, (
-            "Live streaming tool cards should use the same grouped visual "
-            "container as settled history cards to avoid layout jumps."
+        assert "isSimplifiedToolCalling()" in live_fn, (
+            "Live streaming tool cards should branch on the Simplified tool calling toggle."
+        )
+        assert "ensureActivityGroup" in live_fn, (
+            "Simplified live tool rendering should use the grouped activity container."
+        )
+        assert "toolRunningRow" in live_fn, (
+            "The non-simplified live tool path should preserve the upstream running-dots row."
         )
         assert "buildToolCard" in live_fn and "buildToolCard" in settled_fn, (
-            "Live and settled tool rendering should share buildToolCard() for "
-            "consistent markup."
+            "Live and settled tool rendering should share buildToolCard() for consistent markup."
         )
         assert "data-live-tid" in live_fn, (
-            "Live grouping must preserve data-live-tid so tool_start/tool_complete "
-            "updates still replace the correct card."
+            "Live grouping must preserve data-live-tid so tool_start/tool_complete updates still replace the correct card."
         )
 
     def test_tools_and_thinking_share_one_collapsed_activity_dropdown(self):
@@ -131,17 +146,23 @@ class TestToolCallGroupingStatic:
             "Thinking content should be nested inside the shared activity dropdown, not rendered separately."
         )
         render_fn = _function_body(UI_JS, "renderMessages")
-        assert "seg.insertAdjacentHTML('beforeend', _thinkingCardHtml(thinkingText))" not in render_fn, (
-            "Settled thinking cards should not render as standalone assistant-segment content."
+        assert "isSimplifiedToolCalling()" in render_fn and "assistantThinking.set(rawIdx, thinkingText)" in render_fn, (
+            "Settled thinking should move into the shared activity dropdown only when Simplified tool calling is enabled."
+        )
+        assert "seg.insertAdjacentHTML('beforeend', _thinkingCardHtml(thinkingText))" in render_fn, (
+            "The non-simplified path should preserve standalone settled thinking cards."
         )
 
-    def test_live_thinking_uses_shared_activity_dropdown_not_standalone_row(self):
+    def test_live_thinking_uses_shared_activity_dropdown_only_when_simplified(self):
         live_thinking_fn = _function_body(UI_JS, "appendThinking")
-        assert "ensureActivityGroup" in live_thinking_fn, (
-            "Live thinking should be inserted into the same activity dropdown used by live tools."
+        assert "isSimplifiedToolCalling()" in live_thinking_fn, (
+            "Live thinking should branch on the Simplified tool calling toggle."
         )
-        assert "thinkingRow" not in live_thinking_fn, (
-            "Live thinking should no longer create a separate #thinkingRow card outside the activity dropdown."
+        assert "ensureActivityGroup" in live_thinking_fn, (
+            "Simplified live thinking should be inserted into the shared activity dropdown."
+        )
+        assert "thinkingRow" in live_thinking_fn, (
+            "The non-simplified live thinking path should preserve the upstream #thinkingRow card."
         )
 
 
@@ -161,51 +182,56 @@ class TestToolCardDesignTokens:
         ):
             assert token in CSS, f"Missing design token {token} in style.css"
 
-    def test_default_dark_palette_implements_coolors_tokens(self):
+    def test_base_dark_palette_restores_upstream_gold_tokens(self):
         css_min = re.sub(r"\s+", "", CSS)
         expected_tokens = (
+            "--bg:#0D0D1A",
+            "--sidebar:#141425",
+            "--border:#2A2A45",
+            "--text:#FFF8DC",
+            "--muted:#C0C0C0",
+            "--accent:#FFD700",
+            "--surface:#1A1A2E",
+            "--topbar-bg:rgba(20,20,37,.98)",
+        )
+        for token in expected_tokens:
+            assert token in css_min, f"Base dark palette token missing: {token}"
+
+    def test_base_light_palette_restores_upstream_gold_tokens(self):
+        css_min = re.sub(r"\s+", "", CSS)
+        expected_tokens = (
+            "--bg:#FEFCF7",
+            "--sidebar:#FAF7F0",
+            "--border:#E0D8C8",
+            "--text:#1A1610",
+            "--muted:#5C5344",
+            "--accent:#B8860B",
+            "--surface:#F3EEE3",
+        )
+        for token in expected_tokens:
+            assert token in css_min, f"Base light palette token missing: {token}"
+
+    def test_calm_console_palette_is_gated_as_custom_theme_not_base(self):
+        css_min = re.sub(r"\s+", "", CSS)
+        assert ':root.dark[data-theme="calm"]' in css_min, (
+            "Coolors calm palette should be gated behind the custom calm theme."
+        )
+        for token in (
             "--bg:#0A0908",
             "--sidebar:#22333B",
-            "--border:#3B4A50",
             "--text:#EAE0D5",
             "--muted:#C6AC8F",
             "--accent:#C6AC8F",
-            "--surface:#22333B",
-            "--topbar-bg:rgba(34,51,59,.96)",
-        )
-        for token in expected_tokens:
-            assert token in css_min, f"Coolors dark palette token missing: {token}"
+        ):
+            assert token in css_min, f"Calm custom theme token missing: {token}"
 
-    def test_light_palette_implements_coolors_tokens(self):
-        css_min = re.sub(r"\s+", "", CSS)
-        expected_tokens = (
-            "--bg:#EAE0D5",
-            "--sidebar:#F4EEE7",
-            "--border:#C6AC8F",
-            "--text:#0A0908",
-            "--muted:#5B4B3B",
-            "--accent:#22333B",
-            "--surface:#F4EEE7",
-        )
-        for token in expected_tokens:
-            assert token in css_min, f"Coolors light palette token missing: {token}"
-
-    def test_old_calm_console_palette_tokens_are_not_left_as_base_theme(self):
-        css_min = re.sub(r"\s+", "", CSS)
-        old_base_tokens = (
-            "--bg:#0D1117",
-            "--sidebar:#111827",
-            "--accent:#D7B94C",
-            "--bg:#F8FAFC",
-            "--text:#0F172A",
-        )
-        for token in old_base_tokens:
-            assert token not in css_min, f"Old base palette token should be removed: {token}"
-
-    def test_default_skin_preview_uses_coolors_palette(self):
+    def test_default_skin_preview_stays_upstream_and_calm_theme_preview_is_separate(self):
         boot_min = re.sub(r"\s+", "", BOOT_JS)
-        assert "{name:'Default',colors:['#C6AC8F','#EAE0D5','#22333B']}" in boot_min, (
-            "The Default skin swatch should preview the same Coolors palette as the base theme."
+        assert "{name:'Default',colors:['#FFD700','#FFBF00','#CD7F32']}" in boot_min, (
+            "The Default skin swatch should stay aligned with the upstream gold base."
+        )
+        assert "{name:'Calm'," in boot_min and "colors:['#C6AC8F','#EAE0D5','#22333B']" in boot_min, (
+            "The Coolors palette should be exposed as a separate custom Calm theme preview."
         )
 
     def test_claude_like_message_typography_splits_user_and_assistant_fonts(self):
