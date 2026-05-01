@@ -157,15 +157,24 @@ def _build_redact_fn():
     except ImportError:
         return _fallback_redact
 
+    try:
+        import inspect as _inspect
+        _redact_accepts_force = 'force' in _inspect.signature(redact_sensitive_text).parameters
+    except (TypeError, ValueError):
+        _redact_accepts_force = False
+
     def _combined_redact(text: str) -> str:
         if not isinstance(text, str) or not text:
             return text
-        # WebUI API responses are a hard safety boundary — pass force=True so the
-        # agent's broader patterns (Stripe sk_live_, Google AIza…, JWT eyJ…, DB
-        # connection strings, Telegram bot tokens) run regardless of the user's
-        # HERMES_REDACT_SECRETS opt-in. The local fallback then handles the
-        # common short-prefix shapes the agent omits (ghp_, sk-, hf_, AKIA).
-        return _fallback_redact(redact_sensitive_text(text, force=True))
+        # WebUI API responses are a hard safety boundary — pass force=True when
+        # the installed agent redactor supports it so broader patterns (Stripe
+        # sk_live_, Google AIza…, JWT eyJ…, DB connection strings, Telegram bot
+        # tokens) run regardless of HERMES_REDACT_SECRETS. Older bundled agents
+        # do not accept force=, so fall back compatibly and let the local
+        # patterns handle common short-prefix shapes (ghp_, sk-, hf_, AKIA).
+        if _redact_accepts_force:
+            return _fallback_redact(redact_sensitive_text(text, force=True))
+        return _fallback_redact(redact_sensitive_text(text))
 
     return _combined_redact
 
