@@ -174,10 +174,23 @@ class TestSystemTheme:
             "Flicker-prevention head script must normalize legacy theme names on first paint"
         )
 
+    def test_flicker_script_preserves_calm_theme(self):
+        html = read("static/index.html")
+        assert "themes={light:1,dark:1,system:1,calm:1}" in html, (
+            "Flicker-prevention head script must treat calm as a canonical theme, "
+            "not normalize it back to dark before boot.js loads."
+        )
+        assert "theme==='calm'" in html and "dataset.theme='calm'" in html, (
+            "Flicker-prevention head script must apply data-theme='calm' on first paint."
+        )
+
     def test_system_in_commands_themes_list(self):
         src = read("static/commands.js")
         assert "'system'" in src, (
             "/theme command must include 'system' in the valid themes array"
+        )
+        assert "'calm'" in src, (
+            "/theme command must include 'calm' so the Calm custom theme can be activated directly"
         )
 
     def test_commands_uses_apply_theme(self):
@@ -215,15 +228,15 @@ class TestSystemTheme:
 
     def test_i18n_cmd_theme_includes_system_english(self):
         src = read("static/i18n.js")
-        assert "system/dark/light" in src, (
-            "English cmd_theme i18n key must include 'system' in the theme list"
+        assert "system/dark/light/calm" in src, (
+            "English cmd_theme i18n key must include 'system' and 'calm' in the theme list"
         )
 
     def test_i18n_cmd_theme_all_locales(self):
         src = read("static/i18n.js")
-        count = src.count("system/dark/light")
+        count = src.count("system/dark/light/calm")
         assert count >= 5, (
-            f"cmd_theme description should mention 'system' in all 5 locales; "
+            f"cmd_theme description should mention 'system' and 'calm' in all 5 locales; "
             f"found {count}"
         )
 
