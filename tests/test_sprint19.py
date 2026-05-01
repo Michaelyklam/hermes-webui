@@ -2,6 +2,7 @@
 Sprint 19 Tests: auth/login, security headers, request size limit.
 """
 import json, urllib.error, urllib.request
+from types import SimpleNamespace
 
 from tests._pytest_port import BASE
 
@@ -60,6 +61,37 @@ def test_login_page_served():
         assert r.status == 200
         assert "Sign in" in html
         assert "Hermes" in html
+        assert 'src="static/login.js"' in html
+        assert 'src="/static/login.js"' not in html
+
+
+def test_auth_page_redirect_is_subpath_safe(monkeypatch):
+    """Unauthenticated page redirects must not escape reverse-proxy subpath mounts."""
+    from api import auth
+
+    class FakeHandler:
+        headers = {}
+
+        def __init__(self):
+            self.status = None
+            self.response_headers = []
+
+        def send_response(self, status):
+            self.status = status
+
+        def send_header(self, name, value):
+            self.response_headers.append((name, value))
+
+        def end_headers(self):
+            pass
+
+    monkeypatch.setattr(auth, "is_auth_enabled", lambda: True)
+    monkeypatch.setattr(auth, "parse_cookie", lambda handler: None)
+
+    handler = FakeHandler()
+    assert auth.check_auth(handler, SimpleNamespace(path="/")) is False
+    assert handler.status == 302
+    assert ("Location", "login") in handler.response_headers
 
 
 # ── Security headers ─────────────────────────────────────────────────────

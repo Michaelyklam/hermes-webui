@@ -839,7 +839,7 @@ button:hover{background:rgba(124,185,255,.25)}
   </form>
   <div class="err" id="err"></div>
 </div>
-<script src="/static/login.js"></script>
+<script src="static/login.js"></script>
 </body></html>"""
 
 # ── GET routes ────────────────────────────────────────────────────────────────

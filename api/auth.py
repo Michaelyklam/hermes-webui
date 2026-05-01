@@ -229,7 +229,10 @@ def check_auth(handler, parsed) -> bool:
         handler.wfile.write(b'{"error":"Authentication required"}')
     else:
         handler.send_response(302)
-        handler.send_header('Location', '/login')
+        # Use a relative redirect so reverse-proxy subpath mounts such as
+        # /hermes/ stay under their mounted prefix instead of escaping to
+        # the site root /login.
+        handler.send_header('Location', 'login')
         handler.end_headers()
     return False
 
