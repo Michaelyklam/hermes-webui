@@ -17,7 +17,7 @@ from api.auth import check_auth
 from api.config import HOST, PORT, STATE_DIR, SESSION_DIR, DEFAULT_WORKSPACE
 from api.helpers import j, get_profile_cookie
 from api.profiles import set_request_profile, clear_request_profile
-from api.routes import handle_get, handle_post
+from api.routes import handle_get, handle_post, handle_patch, handle_delete
 from api.startup import auto_install_agent_deps, fix_credential_permissions
 from api.updates import WEBUI_VERSION
 
@@ -120,6 +120,40 @@ class Handler(BaseHTTPRequestHandler):
             parsed = urlparse(self.path)
             if not check_auth(self, parsed): return
             result = handle_post(self, parsed)
+            if result is False:
+                return j(self, {'error': 'not found'}, status=404)
+        except Exception as e:
+            print(f'[webui] ERROR {self.command} {self.path}\n' + traceback.format_exc(), flush=True)
+            return j(self, {'error': 'Internal server error'}, status=500)
+        finally:
+            clear_request_profile()
+
+    def do_PATCH(self) -> None:
+        self._req_t0 = time.time()
+        cookie_profile = get_profile_cookie(self)
+        if cookie_profile:
+            set_request_profile(cookie_profile)
+        try:
+            parsed = urlparse(self.path)
+            if not check_auth(self, parsed): return
+            result = handle_patch(self, parsed)
+            if result is False:
+                return j(self, {'error': 'not found'}, status=404)
+        except Exception as e:
+            print(f'[webui] ERROR {self.command} {self.path}\n' + traceback.format_exc(), flush=True)
+            return j(self, {'error': 'Internal server error'}, status=500)
+        finally:
+            clear_request_profile()
+
+    def do_DELETE(self) -> None:
+        self._req_t0 = time.time()
+        cookie_profile = get_profile_cookie(self)
+        if cookie_profile:
+            set_request_profile(cookie_profile)
+        try:
+            parsed = urlparse(self.path)
+            if not check_auth(self, parsed): return
+            result = handle_delete(self, parsed)
             if result is False:
                 return j(self, {'error': 'not found'}, status=404)
         except Exception as e:

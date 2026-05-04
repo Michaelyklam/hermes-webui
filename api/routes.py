@@ -7124,3 +7124,27 @@ def _handle_mcp_server_update(handler, name, body):
     _save_yaml_config_file(_get_config_path(), cfg)
     reload_config()
     return j(handler, {"ok": True, "server": _server_summary(name, server_cfg)})
+
+
+def handle_patch(handler, parsed) -> bool:
+    """Handle all PATCH routes. Returns True if handled, False for 404."""
+    if not _check_csrf(handler):
+        return True
+    body = read_body(handler)
+    if parsed.path.startswith("/api/kanban/"):
+        from api.kanban_bridge import handle_kanban_patch
+
+        return handle_kanban_patch(handler, parsed, body)
+    return False
+
+
+def handle_delete(handler, parsed) -> bool:
+    """Handle all DELETE routes. Returns True if handled, False for 404."""
+    if not _check_csrf(handler):
+        return True
+    body = read_body(handler)
+    if parsed.path.startswith("/api/kanban/"):
+        from api.kanban_bridge import handle_kanban_delete
+
+        return handle_kanban_delete(handler, parsed, body)
+    return False

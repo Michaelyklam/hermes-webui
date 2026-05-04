@@ -1,6 +1,8 @@
 let _currentPanel = 'chat';
 let _renamingAppTitlebar = false;  // guard against re-entrant rename
 let _kanbanBoard = null;
+let _kanbanBoards = [];
+let _kanbanCurrentBoard = '';
 let _kanbanLatestEventId = 0;
 let _kanbanPollTimer = null;
 let _kanbanCurrentTaskId = null;
@@ -875,6 +877,67 @@ function _kanbanTaskMeta(task){
   return bits;
 }
 
+function _kanbanSelectedBoard(){
+  const el = $('kanbanBoardFilter');
+  return (el && el.value) || _kanbanCurrentBoard || '';
+}
+
+function _kanbanAddBoardParam(params){
+  const board = _kanbanSelectedBoard();
+  if (board) params.set('board', board);
+  return params;
+}
+
+function _kanbanAppendBoardQuery(path){
+  const board = _kanbanSelectedBoard();
+  if (!board) return path;
+  return path + (path.includes('?') ? '&' : '?') + 'board=' + encodeURIComponent(board);
+}
+
+function _kanbanSetBoardOptions(payload){
+  const el = $('kanbanBoardFilter');
+  if (!el) return;
+  const boards = (payload && Array.isArray(payload.boards)) ? payload.boards : [];
+  _kanbanBoards = boards;
+  const current = _kanbanCurrentBoard || (payload && payload.current) || (boards[0] && boards[0].slug) || 'default';
+  _kanbanCurrentBoard = current;
+  el.innerHTML = boards.map(board => {
+    const slug = board.slug || 'default';
+    const label = board.name || slug;
+    const total = Number(board.total || 0);
+    const suffix = total ? ` (${total})` : '';
+    return `<option value="${esc(slug)}">${esc(label + suffix)}</option>`;
+  }).join('') || `<option value="default">${esc(t('kanban_default_board'))}</option>`;
+  if ([...el.options].some(o => o.value === current)) el.value = current;
+  el.disabled = el.options.length <= 1;
+  el.title = el.disabled ? t('kanban_default_board') : t('kanban_switch_board');
+}
+
+async function loadKanbanBoards(){
+  try {
+    const payload = await api('/api/kanban/boards');
+    _kanbanSetBoardOptions(payload);
+    return payload;
+  } catch(e) {
+    _kanbanSetBoardOptions({boards:[{slug:'default', name:t('kanban_default_board')}], current:'default'});
+    return {boards: _kanbanBoards, current: _kanbanCurrentBoard};
+  }
+}
+
+async function switchKanbanBoard(){
+  const board = _kanbanSelectedBoard();
+  if (!board) return;
+  _kanbanCurrentBoard = board;
+  try {
+    await api('/api/kanban/boards/' + encodeURIComponent(board) + '/switch', {method:'POST', body: JSON.stringify({})});
+  } catch(e) { /* Switching in the WebUI can still use ?board even if persisting fails. */ }
+  _kanbanLatestEventId = 0;
+  _kanbanCurrentTaskId = null;
+  const preview = $('kanbanTaskPreview');
+  if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
+  await loadKanban(true);
+}
+
 function _kanbanCurrentFilters(){
   const q = $('kanbanSearch') ? $('kanbanSearch').value.trim().toLowerCase() : '';
   const assigneeEl = $('kanbanAssigneeFilter');
@@ -975,9 +1038,10 @@ async function loadKanban(animate){
   const list = $('kanbanList');
   try {
     if (animate && board) board.innerHTML = `<div style="padding:16px;color:var(--muted);font-size:13px">${esc(t('loading'))}</div>`;
+    await loadKanbanBoards();
     const config = await api('/api/kanban/config');
     let assignees = null;
-    try { assignees = await api('/api/kanban/assignees'); } catch(e) { assignees = null; }
+    try { assignees = await api(_kanbanAppendBoardQuery('/api/kanban/assignees')); } catch(e) { assignees = null; }
     _kanbanApplyConfigDefaults(config);
     const filters = _kanbanCurrentFilters();
     const params = new URLSearchParams();
@@ -985,6 +1049,7 @@ async function loadKanban(animate){
     if (filters.tenant) params.set('tenant', filters.tenant);
     if (filters.includeArchived) params.set('include_archived', '1');
     if (filters.onlyMine) params.set('only_mine', '1');
+    _kanbanAddBoardParam(params);
     const path = '/api/kanban/board' + (params.toString() ? '?' + params.toString() : '');
     const data = await api(path);
     if (data && data.changed === false && _kanbanBoard) { _kanbanRenderBoard(); return; }
@@ -1009,7 +1074,7 @@ function filterKanban(){ _kanbanRenderBoard(); }
 
 async function loadKanbanStats(){
   try {
-    const stats = await api('/api/kanban/stats');
+    const stats = await api(_kanbanAppendBoardQuery('/api/kanban/stats'));
     const el = $('kanbanStats');
     if (!el) return;
     const byStatus = (stats && stats.by_status) || {};
@@ -1021,8 +1086,9 @@ async function loadKanbanStats(){
 async function refreshKanbanEvents(){
   if (_currentPanel !== 'kanban' || !_kanbanLatestEventId) return;
   try {
-    const eventsEndpoint = '/api/kanban/events';
-    const events = await api(eventsEndpoint + '?since=' + encodeURIComponent(_kanbanLatestEventId));
+    const params = _kanbanAddBoardParam(new URLSearchParams());
+    params.set('since', String(_kanbanLatestEventId));
+    const events = await api('/api/kanban/events?' + params.toString());
     if (events && Array.isArray(events.events) && events.events.length) {
       _kanbanLatestEventId = Number(events.latest_event_id || events.cursor || _kanbanLatestEventId);
       await loadKanban(true);
@@ -1038,8 +1104,10 @@ function _kanbanStartPolling(){
 
 async function nudgeKanbanDispatcher(){
   try {
-    const dispatchEndpoint = '/api/kanban/dispatch';
-    await api(dispatchEndpoint + '?dry_run=1&max=1', {method: 'POST'});
+    const params = _kanbanAddBoardParam(new URLSearchParams());
+    params.set('dry_run', '1');
+    params.set('max', '1');
+    await api('/api/kanban/dispatch?' + params.toString(), {method: 'POST'});
     showToast(t('kanban_nudge_dispatcher'));
     await loadKanban(true);
   } catch(e) { showToast(t('kanban_unavailable') + ': ' + (e.message || e), 'error'); }
@@ -1055,7 +1123,7 @@ async function bulkUpdateKanban(){
   const status = $('kanbanBulkStatus') ? $('kanbanBulkStatus').value : '';
   if (!ids.length || !status) return;
   try {
-    await api('/api/kanban/tasks/bulk', {method: 'POST', body: JSON.stringify({ids, status})});
+    await api(_kanbanAppendBoardQuery('/api/kanban/tasks/bulk'), {method: 'POST', body: JSON.stringify({ids, status})});
     showToast(t('kanban_bulk_action'));
     await loadKanban(true);
   } catch(e) { showToast(t('kanban_unavailable') + ': ' + (e.message || e), 'error'); }
@@ -1063,7 +1131,7 @@ async function bulkUpdateKanban(){
 
 async function blockKanbanTask(taskId){
   try {
-    await api('/api/kanban/tasks/' + encodeURIComponent(taskId) + '/block', {method: 'POST', body: JSON.stringify({reason: 'blocked from WebUI'})});
+    await api(_kanbanAppendBoardQuery('/api/kanban/tasks/' + encodeURIComponent(taskId) + '/block'), {method: 'POST', body: JSON.stringify({reason: 'blocked from WebUI'})});
     await loadKanbanTask(taskId);
     await loadKanban(true);
   } catch(e) { showToast(t('kanban_unavailable') + ': ' + (e.message || e), 'error'); }
@@ -1071,7 +1139,7 @@ async function blockKanbanTask(taskId){
 
 async function unblockKanbanTask(taskId){
   try {
-    await api('/api/kanban/tasks/' + encodeURIComponent(taskId) + '/unblock', {method: 'POST', body: JSON.stringify({})});
+    await api(_kanbanAppendBoardQuery('/api/kanban/tasks/' + encodeURIComponent(taskId) + '/unblock'), {method: 'POST', body: JSON.stringify({})});
     await loadKanbanTask(taskId);
     await loadKanban(true);
   } catch(e) { showToast(t('kanban_unavailable') + ': ' + (e.message || e), 'error'); }
@@ -1143,7 +1211,7 @@ async function createKanbanTask(){
   const title = input ? input.value.trim() : '';
   if (!title) return;
   try {
-    const created = await api('/api/kanban/tasks', {
+    const created = await api(_kanbanAppendBoardQuery('/api/kanban/tasks'), {
       method: 'POST',
       body: JSON.stringify({title}),
     });
@@ -1156,8 +1224,8 @@ async function createKanbanTask(){
 async function updateKanbanTask(taskId, patch){
   if (!taskId || !patch) return;
   try {
-    const updated = await api('/api/kanban/tasks/' + encodeURIComponent(taskId) + '/patch', {
-      method: 'POST',
+    const updated = await api(_kanbanAppendBoardQuery('/api/kanban/tasks/' + encodeURIComponent(taskId)), {
+      method: 'PATCH',
       body: JSON.stringify(patch),
     });
     await loadKanban(true);
@@ -1170,7 +1238,7 @@ async function addKanbanComment(taskId){
   const body = input ? input.value.trim() : '';
   if (!taskId || !body) return;
   try {
-    await api('/api/kanban/tasks/' + encodeURIComponent(taskId) + '/comments', {
+    await api(_kanbanAppendBoardQuery('/api/kanban/tasks/' + encodeURIComponent(taskId) + '/comments'), {
       method: 'POST',
       body: JSON.stringify({body}),
     });
@@ -1212,9 +1280,9 @@ function _kanbanRenderTaskDetail(data){
 async function loadKanbanTask(taskId){
   if (!taskId) return;
   try {
-    const data = await api('/api/kanban/tasks/' + encodeURIComponent(taskId));
-    const logEndpoint = '/api/kanban/tasks/' + encodeURIComponent(taskId) + '/log';
-    try { data.log = await api(logEndpoint + '?tail=65536'); } catch(e) { data.log = {}; }
+    const data = await api(_kanbanAppendBoardQuery('/api/kanban/tasks/' + encodeURIComponent(taskId)));
+    const logEndpoint = _kanbanAppendBoardQuery('/api/kanban/tasks/' + encodeURIComponent(taskId) + '/log?tail=65536');
+    try { data.log = await api(logEndpoint); } catch(e) { data.log = {}; }
     _kanbanCurrentTaskId = taskId;
     const task = data.task || {};
     const title = _kanbanTaskTitle(task);

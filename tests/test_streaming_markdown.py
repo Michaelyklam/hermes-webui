@@ -108,8 +108,11 @@ class TestIndexHtmlSmdScript:
         )
 
     def test_smd_vendor_import_is_mount_agnostic(self):
-        assert "static/vendor/smd.min.js" in INDEX_HTML, (
-            "index.html must load the vendored streaming-markdown module"
+        assert "./static/vendor/smd.min.js" in INDEX_HTML, (
+            "index.html must load the vendored streaming-markdown module with a browser-valid relative specifier"
+        )
+        assert "from 'static/vendor/smd.min.js'" not in INDEX_HTML, (
+            "bare static/vendor imports are invalid ES module specifiers in browsers; use ./static/vendor"
         )
         assert "from '/static/vendor/smd.min.js'" not in INDEX_HTML, (
             "streaming-markdown import must not be root-absolute; root-absolute "

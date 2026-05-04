@@ -104,6 +104,8 @@ class FakeConn:
 
 
 class FakeKanbanDB:
+    DEFAULT_BOARD = "default"
+
     def __init__(self):
         self.tasks = [
             FakeTask("t_1", "Read-only board target", "ready", "webui-test", tenant="webui"),
@@ -114,11 +116,75 @@ class FakeKanbanDB:
         self.links = []
         self.next_id = 3
         self.next_event_id = 8
+        self.last_init_board = None
+        self.last_connect_board = None
+        self.current_board = "default"
+        self.boards = {
+            "default": {"slug": "default", "name": "Default", "description": "", "archived": False},
+            "client-a": {"slug": "client-a", "name": "Client A", "description": "External client", "archived": False},
+        }
 
-    def init_db(self):
+    def _normalize_board_slug(self, slug):
+        if slug is None:
+            return None
+        value = str(slug).strip().lower()
+        if not value:
+            return None
+        if value.startswith("!"):
+            raise ValueError("invalid board slug")
+        return value
+
+    def board_exists(self, slug=None):
+        return (self._normalize_board_slug(slug) or "default") in self.boards
+
+    def get_current_board(self):
+        return self.current_board
+
+    def set_current_board(self, slug):
+        normed = self._normalize_board_slug(slug)
+        if not self.board_exists(normed):
+            raise ValueError("board does not exist")
+        self.current_board = normed
         return None
 
-    def connect(self):
+    def list_boards(self, include_archived=True):
+        boards = list(self.boards.values())
+        if not include_archived:
+            boards = [b for b in boards if not b.get("archived")]
+        return [dict(b) for b in boards]
+
+    def create_board(self, slug, **kwargs):
+        normed = self._normalize_board_slug(slug)
+        if not normed:
+            raise ValueError("board slug is required")
+        self.boards.setdefault(normed, {"slug": normed, "name": kwargs.get("name") or normed.title(), "description": kwargs.get("description") or "", "archived": False})
+        return dict(self.boards[normed])
+
+    def write_board_metadata(self, slug, **kwargs):
+        normed = self._normalize_board_slug(slug)
+        if not self.board_exists(normed):
+            raise ValueError("board does not exist")
+        self.boards[normed].update({k: v for k, v in kwargs.items() if v is not None})
+        return dict(self.boards[normed])
+
+    def remove_board(self, slug, archive=True):
+        normed = self._normalize_board_slug(slug)
+        if normed == "default":
+            raise ValueError("the 'default' board cannot be removed")
+        if not self.board_exists(normed):
+            raise ValueError("board does not exist")
+        if archive:
+            self.boards[normed]["archived"] = True
+            return {"slug": normed, "action": "archived"}
+        self.boards.pop(normed, None)
+        return {"slug": normed, "action": "deleted"}
+
+    def init_db(self, board=None):
+        self.last_init_board = board
+        return None
+
+    def connect(self, board=None):
+        self.last_connect_board = board
         return FakeConn(self.tasks, self.events)
 
     def list_tasks(self, conn, tenant=None, assignee=None, include_archived=False):
@@ -353,6 +419,38 @@ def test_kanban_board_since_returns_lightweight_unchanged_payload(monkeypatch):
     assert unchanged == {"changed": False, "latest_event_id": 7, "read_only": True}
 
 
+
+
+def test_kanban_board_query_param_selects_explicit_board(monkeypatch):
+    bridge = _load_bridge(monkeypatch)
+
+    data = bridge._board_payload(_parsed(query="board=client-a"))
+
+    fake = bridge._kb()
+    assert fake.last_init_board == "client-a"
+    assert fake.last_connect_board == "client-a"
+    assert data["filters"]["board"] == "client-a"
+
+
+def test_kanban_boards_payload_lists_boards_and_current_selection(monkeypatch):
+    bridge = _load_bridge(monkeypatch)
+
+    payload = bridge._boards_payload(_parsed(path="/api/kanban/boards"))
+
+    assert payload["current"] == "default"
+    assert [board["slug"] for board in payload["boards"]] == ["default", "client-a"]
+    assert payload["boards"][0]["is_current"] is True
+
+
+def test_kanban_switch_board_payload_persists_current_board(monkeypatch):
+    bridge = _load_bridge(monkeypatch)
+
+    switched = bridge._switch_board_payload("client-a")
+
+    assert switched == {"current": "client-a", "read_only": False}
+    assert bridge._kb().get_current_board() == "client-a"
+
+
 def test_kanban_events_payload_matches_polling_shape(monkeypatch):
     bridge = _load_bridge(monkeypatch)
 
@@ -375,6 +473,17 @@ def test_routes_dispatches_api_kanban_post_to_bridge():
     src = open("api/routes.py", encoding="utf-8").read()
     assert 'parsed.path.startswith("/api/kanban/")' in src
     assert "handle_kanban_post(handler, parsed, body)" in src
+
+
+def test_routes_dispatches_api_kanban_patch_and_delete_to_bridge():
+    routes = open("api/routes.py", encoding="utf-8").read()
+    server = open("server.py", encoding="utf-8").read()
+    assert "def handle_patch(handler, parsed)" in routes
+    assert "def handle_delete(handler, parsed)" in routes
+    assert "handle_kanban_patch(handler, parsed, body)" in routes
+    assert "handle_kanban_delete(handler, parsed, body)" in routes
+    assert "def do_PATCH(self)" in server
+    assert "def do_DELETE(self)" in server
 
 
 

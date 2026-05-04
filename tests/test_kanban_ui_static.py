@@ -1,5 +1,7 @@
 from pathlib import Path
+import json
 import re
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
@@ -40,8 +42,10 @@ def test_switch_panel_lazy_loads_kanban_and_toggles_main_view():
 
 def test_kanban_frontend_uses_relative_api_endpoints():
     assert "'/api/kanban/board" in PANELS
-    assert "api('/api/kanban/tasks/" in PANELS
+    assert "_kanbanAppendBoardQuery('/api/kanban/tasks/" in PANELS
     assert "api('/api/kanban/config" in PANELS
+    assert 'id="kanbanBoardFilter"' in INDEX
+    assert "async function switchKanbanBoard" in PANELS
     assert "fetch('/api/kanban" not in PANELS
     assert "kanbanTaskPreview" in PANELS
     assert "classList.add('selected')" in PANELS
@@ -63,14 +67,73 @@ def test_kanban_task_detail_renders_read_only_sections():
 
 
 
+def test_kanban_task_detail_renderer_executes_with_realistic_fixture_and_empty_log():
+    start = PANELS.index("function _kanbanColumnLabel")
+    end = PANELS.index("async function loadKanbanTask")
+    fixture = {
+        "task": {
+            "id": "t_exec",
+            "title": "Renderer regression task",
+            "body": "Detail body",
+            "status": "running",
+            "assignee": "webui-test",
+            "tenant": "default",
+            "priority": 20,
+        },
+        "comments": [{"author": "reviewer", "body": "Looks good", "created_at": "2026-05-04"}],
+        "events": [{"kind": "blocked", "payload": {"reason": "needs QA"}, "created_at": "2026-05-04"}],
+        "links": {"parents": ["t_parent"], "children": ["t_child"]},
+        "runs": [{"id": 7, "status": "completed", "summary": "verified"}],
+        "log": {},
+    }
+    fixture_json = json.dumps(fixture)
+    source_json = json.dumps(PANELS[start:end] + "\nresult = _kanbanRenderTaskDetail(fixture);")
+    script = f"""
+const vm = require('vm');
+const context = {{
+  fixture: {fixture_json},
+  result: '',
+  esc: (value) => String(value ?? '').replace(/[&<>\"]/g, ch => ({{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}}[ch])),
+  t: (key) => ({{
+    kanban_comments_count: 'Comments ({{0}})',
+    kanban_events_count: 'Events ({{0}})',
+    kanban_runs_count: 'Runs ({{0}})',
+    kanban_links: 'Links',
+    kanban_worker_log: 'Worker log',
+    kanban_empty: 'Empty',
+    kanban_no_comments: 'No comments',
+    kanban_no_events: 'No events',
+    kanban_no_runs: 'No runs',
+    kanban_block: 'Block',
+    kanban_unblock: 'Unblock',
+    kanban_no_description: 'No description',
+    kanban_parents: 'Parents',
+    kanban_children: 'Children',
+  }}[key] || key),
+  $: () => null,
+  api: async () => ({{}}),
+  showToast: () => {{}},
+}};
+vm.runInNewContext({source_json}, context);
+for (const expected of ['kanban-detail-comments', 'kanban-detail-events', 'kanban-detail-links', 'kanban-detail-runs', 'kanban-detail-log', 'kanban-comment-form']) {{
+  if (!context.result.includes(expected)) throw new Error('missing ' + expected);
+}}
+if (!context.result.includes('Renderer regression task')) throw new Error('missing task title');
+if (!context.result.includes('Empty')) throw new Error('empty log fallback did not render');
+"""
+    subprocess.run(["node", "-e", script], cwd=ROOT, check=True)
+
+
+
 def test_kanban_write_mvp_has_native_controls_and_api_calls():
     assert 'id="kanbanNewTaskBtn"' in INDEX
     assert "async function createKanbanTask" in PANELS
     assert "async function updateKanbanTask" in PANELS
     assert "async function addKanbanComment" in PANELS
-    assert "api('/api/kanban/tasks'," in PANELS
+    assert "_kanbanAppendBoardQuery('/api/kanban/tasks')" in PANELS
     assert "method: 'POST'" in PANELS
-    assert "'/api/kanban/tasks/' + encodeURIComponent(taskId) + '/patch'" in PANELS
+    assert "method: 'PATCH'" in PANELS
+    assert "_kanbanAppendBoardQuery('/api/kanban/tasks/' + encodeURIComponent(taskId))" in PANELS
     assert "'/api/kanban/tasks/' + encodeURIComponent(taskId) + '/comments'" in PANELS
     assert "kanban-status-actions" in PANELS
     assert "kanban-comment-form" in PANELS
@@ -89,6 +152,17 @@ def test_kanban_board_has_native_css_classes():
     assert "overflow-x:auto" in COMPACT_STYLE
 
 
+def test_kanban_mobile_layout_stacks_columns_without_horizontal_clipping():
+    media_idx = STYLE.find("/* Kanban mobile parity:")
+    assert media_idx >= 0
+    media_block = STYLE[media_idx:STYLE.find("}\n", STYLE.find(".kanban-comment-form", media_idx)) + 2]
+    compact = re.sub(r"\s+", "", media_block)
+    assert ".kanban-board{gap:10px;flex-direction:column;overflow-x:visible;}" in compact
+    assert ".kanban-board-wrap{padding:10px;overflow-x:hidden;" in compact
+    assert ".kanban-column{flex:00auto;min-width:0;max-width:none;width:100%;" in compact
+
+
+
 def test_kanban_i18n_keys_exist_in_every_locale_block():
     locale_blocks = re.findall(r"\n\s*([a-z]{2}(?:-[A-Z]{2})?): \{(.*?)\n\s*\},", I18N, flags=re.S)
     assert len(locale_blocks) >= 8
@@ -98,6 +172,8 @@ def test_kanban_i18n_keys_exist_in_every_locale_block():
         "kanban_search_tasks",
         "kanban_all_assignees",
         "kanban_all_tenants",
+        "kanban_default_board",
+        "kanban_switch_board",
         "kanban_include_archived",
         "kanban_visible_tasks",
         "kanban_no_matching_tasks",
@@ -134,12 +210,14 @@ def test_kanban_dashboard_parity_core_controls_are_native():
     for endpoint in (
         "'/api/kanban/stats'",
         "'/api/kanban/assignees'",
-        "'/api/kanban/events'",
-        "'/api/kanban/dispatch'",
+        "'/api/kanban/events?'",
+        "'/api/kanban/dispatch?'",
         "'/api/kanban/tasks/bulk'",
-        "'/api/kanban/tasks/' + encodeURIComponent(taskId) + '/log'",
+        "'/api/kanban/tasks/' + encodeURIComponent(taskId) + '/log?tail=65536'",
         "'/api/kanban/tasks/' + encodeURIComponent(taskId) + '/block'",
         "'/api/kanban/tasks/' + encodeURIComponent(taskId) + '/unblock'",
+        "'/api/kanban/boards'",
+        "'/api/kanban/boards/' + encodeURIComponent(board) + '/switch'",
     ):
         assert endpoint in PANELS
     assert "setInterval(refreshKanbanEvents" in PANELS
