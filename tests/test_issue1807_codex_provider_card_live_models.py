@@ -1,5 +1,6 @@
 """Regression tests for #1807 -- Codex providers card uses live models."""
 
+import json
 import sys
 import types
 
@@ -58,20 +59,29 @@ def test_codex_provider_card_prefers_live_account_catalog(monkeypatch, tmp_path)
 
     _install_fake_hermes_cli(monkeypatch, provider_model_ids)
     _configure_codex(monkeypatch, tmp_path)
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "models_cache.json").write_text(json.dumps({"models": [
+        {"slug": "gpt-5.3-codex-spark", "visibility": "list", "priority": 30},
+    ]}))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     codex = _codex_provider()
     ids = [m["id"] for m in codex["models"]]
 
-    assert ids == live_codex_ids
-    assert codex["models_total"] == len(live_codex_ids)
+    assert ids == [*live_codex_ids, "gpt-5.3-codex-spark"]
+    assert codex["models_total"] == len(ids)
     assert "gpt-5.5-mini" not in ids
     assert "gpt-5.2-codex" not in ids
     assert "codex-mini-latest" not in ids
 
 
-def test_codex_provider_card_keeps_static_fallback_when_live_catalog_empty(monkeypatch, tmp_path):
+def test_codex_provider_card_keeps_static_fallback_when_live_catalog_and_cache_empty(monkeypatch, tmp_path):
     _install_fake_hermes_cli(monkeypatch, lambda _pid: [])
     _configure_codex(monkeypatch, tmp_path)
+    codex_home = tmp_path / "empty-codex-home"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     codex = _codex_provider()
     ids = [m["id"] for m in codex["models"]]
