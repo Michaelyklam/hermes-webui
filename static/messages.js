@@ -481,6 +481,20 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     clearInflightState(activeSid);
     _clearActivePaneInflightIfOwner();
   }
+  function _isMarkerOnlyAssistantMessage(m){
+    if(!m||m.role!=='assistant') return false;
+    const text=String(typeof msgContent==='function'?msgContent(m):(m.content||''));
+    return typeof _isPreservedCompressionTaskListMarkerOnlyText==='function'
+      && _isPreservedCompressionTaskListMarkerOnlyText(text);
+  }
+  function _replaceMarkerOnlyAssistantWithStreamError(messages){
+    if(!Array.isArray(messages)) return false;
+    const msg=[...messages].reverse().find(m=>m&&m.role==='assistant');
+    if(!_isMarkerOnlyAssistantMessage(msg)) return false;
+    msg.content='**Error:** No response received after context compression. Please retry.';
+    msg.provider_details='The only assistant text returned for this turn was the internal preserved-task-list compression marker, so the WebUI replaced it with an explicit error instead of rendering the marker as a model response.';
+    return true;
+  }
   function _setActivePaneIdleIfOwner(){
     if(_isActiveSession()||!S.session||!INFLIGHT[S.session.session_id]){
       setBusy(false);
@@ -578,6 +592,55 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
   // ── Shared SSE handler wiring (used for initial connection and reconnect) ──
   let _reconnectAttempted=false;
   let _terminalStateReached=false;
+  let _deferredStreamRecoveryBound=false;
+
+  function _pageHiddenForStreamError(){
+    return (typeof document!=='undefined'&&document.visibilityState==='hidden')||
+      (typeof document!=='undefined'&&document.wasDiscarded===true);
+  }
+
+  function _reattachOrRestoreAfterDeferredStreamError(){
+    if(_terminalStateReached||_streamFinalized) return;
+    if((S.session&&S.session.session_id)!==activeSid) return;
+    (async()=>{
+      try{
+        if(streamId){
+          const st=await api(`/api/chat/stream/status?stream_id=${encodeURIComponent(streamId)}`);
+          if(st.active){
+            setComposerStatus('Reconnected');
+            _wireSSE(new EventSource(new URL(`api/chat/stream?stream_id=${encodeURIComponent(streamId)}`,document.baseURI||location.href).href,{withCredentials:true}));
+            return;
+          }
+        }
+      }catch(_){
+        if(_deferStreamErrorIfOffline()||_pageHiddenForStreamError()) return;
+      }
+      if(await _restoreSettledSession()) return;
+      if(_deferStreamErrorIfOffline()||_pageHiddenForStreamError()) return;
+      _handleStreamError();
+    })();
+  }
+
+  function _deferStreamErrorIfPageHidden(){
+    if(!_pageHiddenForStreamError()) return false;
+    setComposerStatus('Connection paused. Reconnecting when this tab returns…');
+    if(S.session&&S.session.session_id===activeSid&&streamId) S.activeStreamId=streamId;
+    if(!_deferredStreamRecoveryBound){
+      _deferredStreamRecoveryBound=true;
+      const resume=()=>{
+        if(_pageHiddenForStreamError()) return;
+        window.removeEventListener('focus',resume);
+        window.removeEventListener('pageshow',resume);
+        document.removeEventListener('visibilitychange',resume);
+        _deferredStreamRecoveryBound=false;
+        _reattachOrRestoreAfterDeferredStreamError();
+      };
+      document.addEventListener('visibilitychange',resume);
+      window.addEventListener('focus',resume);
+      window.addEventListener('pageshow',resume);
+    }
+    return true;
+  }
 
   // Bug A fix (#631): track whether the stream has been finalized so any rAF
   // scheduled by a trailing 'token'/'reasoning' event that arrives in the same
@@ -1375,6 +1438,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
             localStorage.setItem('hermes-webui-session',S.session.session_id);
             if(typeof _setActiveSessionUrl==='function') _setActiveSessionUrl(S.session.session_id);
           }
+          const _markerOnlyAssistantError=_replaceMarkerOnlyAssistantWithStreamError(S.messages);
           if(
             window._compressionUi&&window._compressionUi.automatic&&
             window._compressionUi.sessionId===activeSid&&
@@ -1446,6 +1510,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
           S.busy=false;
           // No-reply guard (#373): if agent returned nothing, show inline error
           if(!S.messages.some(m=>m.role==='assistant'&&String(m.content||'').trim())&&!assistantText){removeThinking();S.messages.push({role:'assistant',content:'**No response received.** Check your API key and model selection.'});}
+          if(_markerOnlyAssistantError&&typeof showToast==='function') showToast('No response received after context compression. Please retry.',5000,'error');
           if(isSessionViewed) _markSessionViewed(completedSid, completedSession.message_count ?? S.messages.length);
           syncTopbar();renderMessages({preserveScroll:true});
           if(shouldFollowOnDone&&typeof scrollToBottom==='function') scrollToBottom();
@@ -1634,6 +1699,7 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
     source.addEventListener('error',async e=>{
       source.close();
       if(_deferStreamErrorIfOffline()) return;
+      if(_deferStreamErrorIfPageHidden()) return;
       if(_terminalStateReached || _streamFinalized){
         _closeSource();
         return;
@@ -1660,12 +1726,14 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
           }
           if(await _restoreSettledSession()) return;
           if(_deferStreamErrorIfOffline()) return;
+          if(_deferStreamErrorIfPageHidden()) return;
           _handleStreamError();
         },1500);
         return;
       }
       if(await _restoreSettledSession()) return;
       if(_deferStreamErrorIfOffline()) return;
+      if(_deferStreamErrorIfPageHidden()) return;
       _handleStreamError();
     });
 
@@ -1701,7 +1769,8 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
           // Fallback to local cancel message if API fails
           if(S.session&&S.session.session_id===activeSid){
             clearLiveToolCards();if(!assistantText)removeThinking();
-            S.messages.push({role:'assistant',content:'**Task cancelled:** Task cancelled.\n\n*The run was cancelled by the user before Skyly finished. No provider failure occurred.*',provider_details:'Task cancelled.',provider_details_label:'Cancellation details',_error:true});renderMessages({preserveScroll:true});
+            const cancelAgentName=((window._botName||'Hermes')+'').trim()||'Hermes';
+            S.messages.push({role:'assistant',content:`**Task cancelled:** Task cancelled.\n\n*The run was cancelled by the user before ${cancelAgentName} finished. No provider failure occurred.*`,provider_details:'Task cancelled.',provider_details_label:'Cancellation details',_error:true});renderMessages({preserveScroll:true});
             _markSessionViewed(activeSid, S.messages.length);
           }
         }
@@ -1739,6 +1808,8 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
           localStorage.setItem('hermes-webui-session',S.session.session_id);
           if(typeof _setActiveSessionUrl==='function') _setActiveSessionUrl(S.session.session_id);
         }
+        const _markerOnlyAssistantError=_replaceMarkerOnlyAssistantWithStreamError(S.messages);
+        if(_markerOnlyAssistantError&&typeof showToast==='function') showToast('No response received after context compression. Please retry.',5000,'error');
         const hasMessageToolMetadata=S.messages.some(m=>{
           if(!m||m.role!=='assistant') return false;
           // Recognize both the standard `tool_calls` (used by completed assistant

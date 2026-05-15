@@ -31,6 +31,7 @@ from api.config import (
     resolve_model_provider,
     resolve_custom_provider_connection,
     model_with_provider_context,
+    load_settings,
 )
 from api.helpers import redact_session_data, _redact_text
 from api.compression_anchor import visible_messages_for_anchor
@@ -41,7 +42,11 @@ from api.turn_journal import append_turn_journal_event_for_stream
 # Global lock for os.environ writes. Per-session locks (_agent_lock) prevent
 # concurrent runs of the SAME session, but two DIFFERENT sessions can still
 # interleave their os.environ writes. This global lock serializes the env
-# save/restore around the entire agent run.
+# save/restore — held only briefly across the env-mutation critical section,
+# NOT for the entire agent run. The agent runs outside the lock; the finally
+# block re-acquires to atomically restore env vars. See narrow-lock pattern
+# in _run_agent_streaming (line ~2719) and profile_env_for_background_worker
+# (api/profiles.py:715).
 _ENV_LOCK = threading.Lock()
 
 
@@ -141,17 +146,16 @@ def _has_new_assistant_reply(all_messages: list, prev_count: int) -> bool:
     messages at index >= prev_count are inspected so that historical assistant
     replies don't mask a silent failure on the current turn.
 
-    If ``len(all_messages) < prev_count`` (an edge-case shrink) we fall back
-    to scanning the full list — this keeps behaviour consistent with the
-    original code when offsets don't cleanly apply.  When ``len == prev_count``,
-    there are no new messages and we return False.
+    If ``len(all_messages) < prev_count`` (an edge-case shrink), there is no
+    reliable new-message slice to inspect. Treat that as "no new assistant
+    reply" so stale historical assistant replies cannot mask a silent failure.
+    When ``len == prev_count``, there are no new messages and we return False.
     """
     if len(all_messages) > prev_count:
         # Normal case: new messages appended beyond the pre-turn history.
         candidates = all_messages[prev_count:]
     elif len(all_messages) < prev_count:
-        # Edge-case shrink — scan everything as fallback.
-        candidates = all_messages
+        return False
     else:
         # Same length. In production this means no new messages were appended.
         # However, some test fixtures replace the entire message list rather
@@ -161,6 +165,21 @@ def _has_new_assistant_reply(all_messages: list, prev_count: int) -> bool:
         m.get('role') == 'assistant' and str(m.get('content') or '').strip()
         for m in candidates
     )
+
+
+def _preferred_agent_display_name() -> str:
+    """Return the configured assistant display name for user-facing copy."""
+    try:
+        name = str((load_settings() or {}).get('bot_name') or '').strip()
+    except Exception:
+        logger.debug("Failed to load bot_name for cancellation copy", exc_info=True)
+        name = ''
+    return name or 'Hermes'
+
+
+def _cancelled_turn_hint(agent_name: str | None = None) -> str:
+    name = str(agent_name or _preferred_agent_display_name()).strip() or 'Hermes'
+    return f'The run was cancelled by the user before {name} finished. No provider failure occurred.'
 
 
 def _classify_provider_error(err_str: str, exc=None, *, silent_failure: bool = False) -> dict:
@@ -199,7 +218,7 @@ def _classify_provider_error(err_str: str, exc=None, *, silent_failure: bool = F
         return {
             'label': 'Task cancelled',
             'type': 'cancelled',
-            'hint': 'The run was cancelled by the user before Skyly finished. No provider failure occurred.',
+            'hint': _cancelled_turn_hint(),
         }
     if _is_interrupted:
         return {
@@ -316,7 +335,7 @@ def _cancelled_turn_content(message: str = 'Task cancelled.') -> str:
         _message += '.'
     return (
         f"**Task cancelled:** {_message}\n\n"
-        "*The run was cancelled by the user before Skyly finished. No provider failure occurred.*"
+        f"*{_cancelled_turn_hint()}*"
     )
 
 
@@ -584,9 +603,96 @@ def _build_agent_thread_env(profile_runtime_env: dict | None, workspace: str, se
         'TERMINAL_CWD': str(workspace),
         'HERMES_EXEC_ASK': '1',
         'HERMES_SESSION_KEY': session_id,
+        'HERMES_SESSION_ID': session_id,
+        'HERMES_SESSION_PLATFORM': 'webui',
         'HERMES_HOME': profile_home,
     })
     return env
+
+
+def _format_process_notification(evt: dict) -> str:
+    """Format a completed background process notification for agent input."""
+    if not isinstance(evt, dict):
+        return ''
+    if evt.get('type') != 'completion':
+        return ''
+    _sid = evt.get('session_id', '')
+    _cmd = evt.get('command', '')
+    _exit = evt.get('exit_code', '')
+    _out = evt.get('output') or ''
+    if len(_out) > 4000:
+        _out = _out[:4000] + '\n... (truncated)'
+    return (
+        f"[IMPORTANT: Background process {_sid} completed (exit code {_exit}).\n"
+        f"Command: {_cmd}\n"
+        f"Output:\n{_out}]"
+    )
+
+
+def _mark_process_completion_consumed(process_registry, process_id: str) -> None:
+    """Best-effort bridge to the agent registry's private completion marker."""
+    try:
+        with process_registry._lock:
+            process_registry._completion_consumed.add(process_id)
+    except Exception:
+        logger.debug("Failed to mark process completion consumed", exc_info=True)
+
+
+def _drain_webui_process_notifications(session_id: str) -> list[str]:
+    """Return completion notifications that belong to this WebUI session.
+
+    The agent registry completion queue is process-wide and events do not carry
+    the WebUI session key directly. Look up the live process session before
+    delivery so completions from other tabs remain queued for their owners.
+    """
+    if not session_id:
+        return []
+    try:
+        from tools.process_registry import process_registry
+    except Exception:
+        return []
+
+    notifications: list[str] = []
+    skipped_events: list[dict] = []
+    completion_queue = getattr(process_registry, 'completion_queue', None)
+    if completion_queue is None:
+        return []
+
+    while True:
+        try:
+            evt = completion_queue.get_nowait()
+        except queue.Empty:
+            break
+        except Exception:
+            logger.debug("Failed to drain process completion queue", exc_info=True)
+            break
+
+        evt_sid = str(evt.get('session_id') or '') if isinstance(evt, dict) else ''
+        if not evt_sid:
+            skipped_events.append(evt)
+            continue
+        try:
+            if process_registry.is_completion_consumed(evt_sid):
+                continue
+            proc = process_registry.get(evt_sid)
+        except Exception:
+            proc = None
+        if getattr(proc, 'session_key', None) != session_id:
+            skipped_events.append(evt)
+            continue
+
+        notification = _format_process_notification(evt)
+        if notification:
+            notifications.append(notification)
+            _mark_process_completion_consumed(process_registry, evt_sid)
+
+    for evt in skipped_events:
+        try:
+            completion_queue.put(evt)
+        except Exception:
+            logger.debug("Failed to requeue process completion event", exc_info=True)
+            break
+    return notifications
 
 
 def _attachment_name(att) -> str:
@@ -684,6 +790,20 @@ def _build_native_multimodal_message(workspace_ctx: str, msg_text: str, attachme
 
     parts = [{'type': 'text', 'text': workspace_ctx + msg_text}]
     workspace_root = Path(workspace).expanduser().resolve()
+    # Stage-361 maintainer fix (Opus SHOULD-FIX): chat uploads from #2319 now
+    # land in ~/.hermes/webui/attachments/<sid>/ (outside workspace_root by
+    # design). The pre-existing `path.relative_to(workspace_root)` guard would
+    # silently reject every image upload for vision-capable models. Allow the
+    # configured attachment root in addition to workspace_root so native
+    # multimodal embeds still build the base64 image_url part. The
+    # _attachment_root() helper applies expanduser+resolve and is also reused
+    # by _upload_destination — single source of truth for the inbox root.
+    try:
+        from api.upload import _attachment_root
+        attachment_root = _attachment_root()
+        _allowed_roots = (workspace_root, attachment_root)
+    except Exception:
+        _allowed_roots = (workspace_root,)
     image_count = 0
 
     for att in attachments or []:
@@ -694,9 +814,11 @@ def _build_native_multimodal_message(workspace_ctx: str, msg_text: str, attachme
             continue
         try:
             path = Path(raw_path).expanduser().resolve()
-            # Uploads should live inside the selected workspace. Do not read
-            # arbitrary paths from client-provided attachment metadata.
-            path.relative_to(workspace_root)
+            # Uploads should live inside the selected workspace OR the
+            # session attachment inbox (#2319). Do not read arbitrary paths
+            # from client-provided attachment metadata.
+            if not any(path.is_relative_to(r) for r in _allowed_roots):
+                continue
             if not path.is_file():
                 continue
             size = path.stat().st_size
@@ -1469,24 +1591,27 @@ def _run_background_title_update(session_id: str, user_text: str, assistant_text
         if not still_auto:
             _put_title_status(put_event, session_id, 'skipped', 'manual_title', current)
             return
-        aux_title_configured = _aux_title_configured()
-        if agent and not aux_title_configured:
-            next_title, llm_status, raw_preview = _generate_llm_session_title_for_agent(agent, user_text, assistant_text)
-            if not next_title and llm_status in ('llm_error', 'llm_invalid'):
-                next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text, agent=agent, use_agent_model=True)
-        else:
-            next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text)
-            if not next_title and agent and llm_status in ('llm_error_aux', 'llm_invalid_aux'):
+        from api import profiles as profiles_api
+
+        with profiles_api.profile_env_for_background_worker(s, "background title", logger_override=logger):
+            aux_title_configured = _aux_title_configured()
+            if agent and not aux_title_configured:
                 next_title, llm_status, raw_preview = _generate_llm_session_title_for_agent(agent, user_text, assistant_text)
-        source = llm_status
-        if not next_title:
-            fallback_title = _fallback_title_from_exchange(user_text, assistant_text)
-            if fallback_title and not _is_generic_fallback_title(fallback_title):
-                logger.debug("Using local fallback for session title generation")
-                next_title = fallback_title
-                source = 'fallback'
-            elif fallback_title:
-                logger.debug("Skipping generic local fallback for session title generation: %r", fallback_title)
+                if not next_title and llm_status in ('llm_error', 'llm_invalid'):
+                    next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text, agent=agent, use_agent_model=True)
+            else:
+                next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text)
+                if not next_title and agent and llm_status in ('llm_error_aux', 'llm_invalid_aux'):
+                    next_title, llm_status, raw_preview = _generate_llm_session_title_for_agent(agent, user_text, assistant_text)
+            source = llm_status
+            if not next_title:
+                fallback_title = _fallback_title_from_exchange(user_text, assistant_text)
+                if fallback_title and not _is_generic_fallback_title(fallback_title):
+                    logger.debug("Using local fallback for session title generation")
+                    next_title = fallback_title
+                    source = 'fallback'
+                elif fallback_title:
+                    logger.debug("Skipping generic local fallback for session title generation: %r", fallback_title)
         fallback_reason = (
             f'local_summary:{llm_status}'
             if source == 'fallback' and llm_status
@@ -1549,15 +1674,18 @@ def _run_background_title_refresh(session_id: str, user_text: str, assistant_tex
             return
         if not effective or effective in ('Untitled', 'New Chat'):
             return
-        aux_title_configured = _aux_title_configured()
-        if agent and not aux_title_configured:
-            next_title, llm_status, raw_preview = _generate_llm_session_title_for_agent(agent, user_text, assistant_text)
-            if not next_title and llm_status in ('llm_error', 'llm_invalid'):
-                next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text, agent=agent, use_agent_model=True)
-        else:
-            next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text)
-            if not next_title and agent and llm_status in ('llm_error_aux', 'llm_invalid_aux'):
+        from api import profiles as profiles_api
+
+        with profiles_api.profile_env_for_background_worker(s, "background title", logger_override=logger):
+            aux_title_configured = _aux_title_configured()
+            if agent and not aux_title_configured:
                 next_title, llm_status, raw_preview = _generate_llm_session_title_for_agent(agent, user_text, assistant_text)
+                if not next_title and llm_status in ('llm_error', 'llm_invalid'):
+                    next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text, agent=agent, use_agent_model=True)
+            else:
+                next_title, llm_status, raw_preview = _generate_llm_session_title_via_aux(user_text, assistant_text)
+                if not next_title and agent and llm_status in ('llm_error_aux', 'llm_invalid_aux'):
+                    next_title, llm_status, raw_preview = _generate_llm_session_title_for_agent(agent, user_text, assistant_text)
         if not next_title:
             _put_title_status(put_event, session_id, 'refresh_skipped', llm_status or 'empty', effective, raw_preview)
             return
@@ -1587,6 +1715,98 @@ def _run_background_title_refresh(session_id: str, user_text: str, assistant_tex
         logger.info("Adaptive title refresh: session=%s new_title=%r", session_id, effective_title)
     except Exception:
         logger.debug("Background title refresh failed for session %s", session_id, exc_info=True)
+
+
+def _preserve_pre_compression_snapshot(s, old_sid: str) -> None:
+    """Persist old_sid as a read-only pre-compression snapshot.
+
+    Context compression rotates the active WebUI session id from old_sid to the
+    agent's new continuation id. The old JSON must remain on disk for lineage
+    traversal, but it should not continue to appear as an active sidebar row.
+    """
+    old_path = SESSION_DIR / f'{old_sid}.json'
+    if not old_path.exists():
+        return
+    try:
+        existing_text = old_path.read_text(encoding='utf-8')
+        try:
+            existing = json.loads(existing_text)
+            existing_msgs = len(existing.get('messages') or [])
+            existing_snapshot = bool(existing.get('pre_compression_snapshot'))
+        except (json.JSONDecodeError, ValueError):
+            # Treat corrupt/malformed old JSON as missing history and rewrite it
+            # from the in-memory pre-compression messages below. That is safer
+            # than leaving an unreadable recovery snapshot behind.
+            existing_msgs = -1
+            existing_snapshot = False
+        if len(s.messages) <= existing_msgs and existing_snapshot:
+            return
+        if len(s.messages) > existing_msgs:
+            # In-memory messages are newer than the file; save the full old
+            # snapshot from the current session object while preserving its
+            # pre-existing parent_session_id lineage.
+            saved_sid = s.session_id
+            saved_snapshot = bool(getattr(s, 'pre_compression_snapshot', False))
+            s.session_id = old_sid
+            s.pre_compression_snapshot = True
+            # Stage-359 / PR #2295: clear runtime stream-state fields on the
+            # archived snapshot so the sidebar does not reopen the parent as
+            # a permanently-running session while the child already holds the
+            # completed answer. The continuation session's live state is
+            # restored from saved_* locals in the finally block.
+            saved_active_stream_id = getattr(s, 'active_stream_id', None)
+            saved_pending_user_message = getattr(s, 'pending_user_message', None)
+            saved_pending_attachments = list(getattr(s, 'pending_attachments', []) or [])
+            saved_pending_started_at = getattr(s, 'pending_started_at', None)
+            s.active_stream_id = None
+            s.pending_user_message = None
+            s.pending_attachments = []
+            s.pending_started_at = None
+            try:
+                # skip_index=False so the snapshot appears in _index.json with
+                # the pre_compression_snapshot marker. The sidebar projection
+                # (#2285) reads that marker to hide the snapshot from active
+                # rows while keeping the JSON discoverable for lineage traversal.
+                s.save(touch_updated_at=False, skip_index=False)
+                logger.info(
+                    "Preserved pre-compression session %s (%d messages) to disk",
+                    old_sid, len(s.messages),
+                )
+            finally:
+                s.session_id = saved_sid
+                s.pre_compression_snapshot = saved_snapshot
+                s.active_stream_id = saved_active_stream_id
+                s.pending_user_message = saved_pending_user_message
+                s.pending_attachments = saved_pending_attachments
+                s.pending_started_at = saved_pending_started_at
+            return
+        # Existing file is already at least as complete as memory; stamp only
+        # the snapshot marker so index/sidebar projection can hide it without
+        # rewriting a shorter messages array over a fuller transcript.
+        from api.models import Session
+        snapshot = Session.load(old_sid)
+        if snapshot:
+            snapshot.pre_compression_snapshot = True
+            # Stage-359 Opus SHOULD-FIX: clear runtime fields on the loaded
+            # snapshot too. If the disk snapshot was last persisted while the
+            # parent was live, it could carry a stale active_stream_id /
+            # pending_* over to disk. The sidebar projection filters snapshot
+            # rows so this is latent today, but the contract should match the
+            # primary branch above so future readers can trust snapshot files
+            # to never contain live runtime state.
+            snapshot.active_stream_id = None
+            snapshot.pending_user_message = None
+            snapshot.pending_attachments = []
+            snapshot.pending_started_at = None
+            snapshot.save(touch_updated_at=False, skip_index=False)
+            logger.info(
+                "Marked pre-compression session %s as sidebar-hidden snapshot",
+                old_sid,
+            )
+    except OSError:
+        logger.debug("Could not read old session file before preservation")
+    except Exception:
+        logger.debug("Failed to preserve pre-compression session file", exc_info=True)
 
 
 def _maybe_schedule_title_refresh(session, put_event, agent):
@@ -2260,6 +2480,8 @@ def _run_agent_streaming(
     old_cwd = None
     old_exec_ask = None
     old_session_key = None
+    old_session_id = None
+    old_session_platform = None
     old_hermes_home = None
     old_profile_env = {}
 
@@ -2515,11 +2737,15 @@ def _run_agent_streaming(
             old_cwd = os.environ.get('TERMINAL_CWD')
             old_exec_ask = os.environ.get('HERMES_EXEC_ASK')
             old_session_key = os.environ.get('HERMES_SESSION_KEY')
+            old_session_id = os.environ.get('HERMES_SESSION_ID')
+            old_session_platform = os.environ.get('HERMES_SESSION_PLATFORM')
             old_hermes_home = os.environ.get('HERMES_HOME')
             os.environ.update(_profile_runtime_env)
             os.environ['TERMINAL_CWD'] = str(s.workspace)
             os.environ['HERMES_EXEC_ASK'] = '1'
             os.environ['HERMES_SESSION_KEY'] = session_id
+            os.environ['HERMES_SESSION_ID'] = session_id
+            os.environ['HERMES_SESSION_PLATFORM'] = 'webui'
             if _profile_home:
                 os.environ['HERMES_HOME'] = _profile_home
                 # Patch module-level caches to match the active profile.
@@ -3271,7 +3497,11 @@ def _run_agent_streaming(
             )
             _ckpt_thread.start()
 
-            user_message = _build_native_multimodal_message(workspace_ctx, msg_text, attachments, workspace, cfg=_cfg)
+            _process_notifications = _drain_webui_process_notifications(session_id)
+            _agent_msg_text = msg_text
+            if _process_notifications:
+                _agent_msg_text = "\n\n".join([*_process_notifications, msg_text]).strip()
+            user_message = _build_native_multimodal_message(workspace_ctx, _agent_msg_text, attachments, workspace, cfg=_cfg)
             result = agent.run_conversation(
                 user_message=user_message,
                 system_message=workspace_system_msg,
@@ -3611,8 +3841,6 @@ def _run_agent_streaming(
                 if _agent_sid and _agent_sid != session_id:
                     old_sid = session_id
                     new_sid = _agent_sid
-                    old_path = SESSION_DIR / f'{old_sid}.json'
-                    new_path = SESSION_DIR / f'{new_sid}.json'
                     s.session_id = new_sid
                     # Carry profile identity across the compression boundary.
                     # Without this, s.profile stays None on the continuation
@@ -3643,39 +3871,7 @@ def _run_agent_streaming(
                     # compression removes messages from the model's context.  Skip
                     # the write when the file already contains up-to-date data
                     # (i.e. it was just saved by a checkpoint).
-                    if old_path.exists():
-                        try:
-                            existing_text = old_path.read_text(encoding='utf-8')
-                            try:
-                                existing = json.loads(existing_text)
-                                existing_msgs = len(existing.get('messages') or [])
-                            except (json.JSONDecodeError, ValueError):
-                                existing_msgs = -1
-                            if len(s.messages) > existing_msgs:
-                                # In-memory messages are newer than the file — save.
-                                # Preserve s.parent_session_id as-is (do NOT clear it):
-                                # the OLD session's parent_session_id is its own
-                                # pre-existing lineage (e.g. a /branch fork's
-                                # parent_session_id back to the original).  We must
-                                # not overwrite that with None on disk.  Stage-353
-                                # Opus SHOULD-FIX: previous code cleared parent
-                                # before save then restored after — but the on-disk
-                                # copy persisted with parent=None, breaking
-                                # fork-of-fork lineage traversal.  (#2227 + #2223)
-                                saved_sid = s.session_id
-                                s.session_id = old_sid
-                                try:
-                                    s.save(touch_updated_at=False, skip_index=True)
-                                    logger.info(
-                                        "Preserved pre-compression session %s (%d messages) to disk",
-                                        old_sid, len(s.messages),
-                                    )
-                                except Exception:
-                                    logger.debug("Failed to preserve pre-compression session file", exc_info=True)
-                                finally:
-                                    s.session_id = saved_sid
-                        except OSError:
-                            logger.debug("Could not read old session file before preservation")
+                    _preserve_pre_compression_snapshot(s, old_sid)
                     # Always link the continuation session to its immediate predecessor
                     # (the preserved snapshot).  This OVERRIDES any prior
                     # parent_session_id because the new continuation IS the next link
@@ -4195,6 +4391,10 @@ def _run_agent_streaming(
                 else: os.environ['HERMES_EXEC_ASK'] = old_exec_ask
                 if old_session_key is None: os.environ.pop('HERMES_SESSION_KEY', None)
                 else: os.environ['HERMES_SESSION_KEY'] = old_session_key
+                if old_session_id is None: os.environ.pop('HERMES_SESSION_ID', None)
+                else: os.environ['HERMES_SESSION_ID'] = old_session_id
+                if old_session_platform is None: os.environ.pop('HERMES_SESSION_PLATFORM', None)
+                else: os.environ['HERMES_SESSION_PLATFORM'] = old_session_platform
                 if old_hermes_home is None: os.environ.pop('HERMES_HOME', None)
                 else: os.environ['HERMES_HOME'] = old_hermes_home
 
