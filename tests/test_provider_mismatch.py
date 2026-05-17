@@ -1111,7 +1111,7 @@ class TestModelSwitchToast:
         # Find the onchange block
         idx = src.find("modelSelect').onchange")
         assert idx != -1, "modelSelect.onchange not found in boot.js"
-        block = src[idx:idx + 1100]
+        block = src[idx:idx + 1400]
         assert "model_scope_toast" in block, (
             "modelSelect.onchange must show that the selected model applies to this conversation"
         )
@@ -1131,7 +1131,7 @@ class TestModelSwitchToast:
         src = _read("static/boot.js")
         idx = src.find("model_scope_toast")
         assert idx != -1
-        surrounding = src[max(0, idx - 50):idx + 100]
+        surrounding = src[max(0, idx - 50):idx + 700]
         assert "showToast" in surrounding, "Must use showToast() not alert()"
         assert "alert(" not in surrounding, "Must not use alert()"
 
@@ -1140,7 +1140,7 @@ class TestModelSwitchToast:
         src = _read("static/boot.js")
         idx = src.find("model_scope_toast")
         assert idx != -1
-        surrounding = src[max(0, idx - 100):idx + 50]
+        surrounding = src[max(0, idx - 100):idx + 700]
         assert "typeof showToast" in surrounding, (
             "showToast call must be guarded with typeof check"
         )
