@@ -907,6 +907,25 @@ function clearPreview(opts={}){
 }
 $('btnClearPreview').onclick=handleWorkspaceClose;
 // workspacePath click handler removed -- use topbar workspace chip dropdown instead
+function _applySessionContextMetadataUpdate(data){
+  if(!S.session||!data||!data.session)return;
+  S.session.context_length=data.session.context_length||0;
+  S.session.threshold_tokens=data.session.threshold_tokens||0;
+  S.session.last_prompt_tokens=data.session.last_prompt_tokens||0;
+  if(typeof _syncCtxIndicator==='function'){
+    const u=S.lastUsage||{};
+    const _pick=(latest,stored,dflt=0)=>latest!=null?latest:(stored!=null?stored:dflt);
+    _syncCtxIndicator({
+      input_tokens:_pick(u.input_tokens,S.session.input_tokens),
+      output_tokens:_pick(u.output_tokens,S.session.output_tokens),
+      estimated_cost:_pick(u.estimated_cost,S.session.estimated_cost),
+      context_length:S.session.context_length||0,
+      last_prompt_tokens:_pick(u.last_prompt_tokens,S.session.last_prompt_tokens),
+      threshold_tokens:S.session.threshold_tokens||0,
+    });
+  }
+}
+
 $('modelSelect').onchange=async()=>{
   if(!S.session)return;
   const selectedModel=$('modelSelect').value;
@@ -916,7 +935,8 @@ $('modelSelect').onchange=async()=>{
   if(typeof closeModelDropdown==='function') closeModelDropdown();
   if(typeof _writePersistedModelState==='function') _writePersistedModelState(modelState.model,modelState.model_provider);
   else try{localStorage.setItem('hermes-webui-model',modelState.model)}catch{}
-  await api('/api/session/update',{method:'POST',body:JSON.stringify({
+  const modelScopeToastKey='model_scope_toast';
+  const data=await api('/api/session/update',{method:'POST',body:JSON.stringify({
     session_id:S.session.session_id,
     workspace:S.session.workspace,
     model:modelState.model,
@@ -928,8 +948,9 @@ $('modelSelect').onchange=async()=>{
   syncTopbar();
   // Clarify scope: composer model changes are session-local, not the global default.
   if(typeof showToast==='function'){
-    showToast(t('model_scope_toast')||'Applies to this conversation from your next message.', 3000);
+    showToast(t(modelScopeToastKey)||'Applies to this conversation from your next message.', 3000);
   }
+  _applySessionContextMetadataUpdate(data);
   // Warn if selected model belongs to a different provider than what Hermes is configured for
   if(typeof _checkProviderMismatch==='function'){
     const warn=_checkProviderMismatch(selectedModel);
